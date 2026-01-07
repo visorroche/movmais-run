@@ -1,0 +1,214 @@
+import "dotenv/config";
+import "reflect-metadata";
+
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { AppDataSource } from "./utils/data-source.js";
+import { CompanyPlataform } from "./entities/CompanyPlataform.js";
+
+type JobName = "allpost:freight-quotes" | "precode:products" | "tray:products" | "precode:orders" | "tray:orders";
+
+const JOB_LOCKS = new Map<JobName, boolean>();
+let shuttingDown = false;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function utcMidnight(date = new Date()): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
+}
+
+function addDaysUtc(d: Date, days: number): Date {
+  const out = new Date(d.getTime());
+  out.setUTCDate(out.getUTCDate() + days);
+  return out;
+}
+
+function formatYmdUtc(d: Date): string {
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+async function ensureDb(): Promise<void> {
+  if (AppDataSource.isInitialized) return;
+  await AppDataSource.initialize();
+}
+
+async function listCompanyIdsForPlatformSlug(slug: string): Promise<number[]> {
+  await ensureDb();
+  const cpRepo = AppDataSource.getRepository(CompanyPlataform);
+  const rows = await cpRepo
+    .createQueryBuilder("cp")
+    .innerJoin("cp.platform", "platform")
+    .innerJoin("cp.company", "company")
+    .where("platform.slug = :slug", { slug })
+    .select("company.id", "id")
+    .getRawMany<{ id: number }>();
+
+  const ids = rows
+    .map((r) => Number(r.id))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
+function resolveDistScript(scriptRelFromDistRoot: string): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  // src/scheduler.ts -> dist/scheduler.js, então __dirname aponta para ./dist
+  return path.resolve(__dirname, scriptRelFromDistRoot);
+}
+
+async function runNodeScript(scriptPath: string, argv: string[], label: string): Promise<void> {
+  if (shuttingDown) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [scriptPath, ...argv], {
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`[scheduler] ${label} terminou com exit_code=${code ?? "null"}`));
+    });
+  });
+}
+
+async function runJob(name: JobName, fn: () => Promise<void>): Promise<void> {
+  if (JOB_LOCKS.get(name)) {
+    console.log(`[scheduler] job ${name} ainda está rodando; pulando este tick.`);
+    return;
+  }
+  JOB_LOCKS.set(name, true);
+  const started = Date.now();
+  console.log(`[scheduler] job ${name} iniciando...`);
+  try {
+    await fn();
+    console.log(`[scheduler] job ${name} finalizado OK em ${Date.now() - started}ms`);
+  } catch (err) {
+    console.error(`[scheduler] job ${name} erro:`, err);
+  } finally {
+    JOB_LOCKS.set(name, false);
+  }
+}
+
+async function runForCompanies(platformSlug: string, scriptRel: string, makeArgs: (companyId: number) => string[]) {
+  const ids = await listCompanyIdsForPlatformSlug(platformSlug);
+  if (ids.length === 0) {
+    console.log(`[scheduler] platform=${platformSlug} sem companies instaladas; nada a fazer.`);
+    return;
+  }
+
+  const scriptPath = resolveDistScript(scriptRel);
+  for (const companyId of ids) {
+    if (shuttingDown) break;
+    const label = `${platformSlug} company=${companyId} script=${scriptRel}`;
+    console.log(`[scheduler] executando ${label}`);
+    // Espaça um pouco para evitar rajadas (especialmente em produção)
+    // eslint-disable-next-line no-await-in-loop
+    await runNodeScript(scriptPath, makeArgs(companyId), label);
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(250);
+  }
+}
+
+async function main() {
+  const EVERY_5_MIN = 5 * 60 * 1000;
+  const EVERY_30_MIN = 30 * 60 * 1000;
+  const EVERY_3_HOURS = 3 * 60 * 60 * 1000;
+
+  process.on("SIGINT", () => {
+    shuttingDown = true;
+    console.log("[scheduler] SIGINT recebido; finalizando...");
+  });
+  process.on("SIGTERM", () => {
+    shuttingDown = true;
+    console.log("[scheduler] SIGTERM recebido; finalizando...");
+  });
+
+  await ensureDb();
+
+  // job: allpost freight quotes (a cada 5 min)
+  const tickAllpost = () =>
+    runJob("allpost:freight-quotes", async () => {
+      await runForCompanies("allpost", "commands/allpost/allpostFreightQuotes.js", (companyId) => [`--company=${companyId}`]);
+    });
+
+  // job: products (a cada 3h)
+  const tickPrecodeProducts = () =>
+    runJob("precode:products", async () => {
+      await runForCompanies("precode", "commands/precode/precodeProducts.js", (companyId) => [`--company=${companyId}`]);
+    });
+  const tickTrayProducts = () =>
+    runJob("tray:products", async () => {
+      await runForCompanies("tray", "commands/tray/trayProducts.js", (companyId) => [`--company=${companyId}`]);
+    });
+
+  // job: orders (a cada 30 min) — roda um range curto (ontem..hoje UTC) para capturar atualizações
+  const tickPrecodeOrders = () =>
+    runJob("precode:orders", async () => {
+      const end = formatYmdUtc(utcMidnight(new Date()));
+      const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
+      await runForCompanies("precode", "commands/precode/precodeOrders.js", (companyId) => [
+        `--company=${companyId}`,
+        `--start-date=${start}`,
+        `--end-date=${end}`,
+      ]);
+    });
+  const tickTrayOrders = () =>
+    runJob("tray:orders", async () => {
+      const end = formatYmdUtc(utcMidnight(new Date()));
+      const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
+      await runForCompanies("tray", "commands/tray/trayOrders.js", (companyId) => [
+        `--company=${companyId}`,
+        `--start-date=${start}`,
+        `--end-date=${end}`,
+      ]);
+    });
+
+  console.log("[scheduler] iniciado.");
+  console.log("[scheduler] agendas: allpost=5min, orders=30min, products=3h");
+
+  // roda na partida (com pequeno delay para evitar corrida com deploy)
+  setTimeout(() => void tickAllpost(), 2_000);
+  setTimeout(() => void tickPrecodeOrders(), 4_000);
+  setTimeout(() => void tickTrayOrders(), 6_000);
+  setTimeout(() => void tickPrecodeProducts(), 8_000);
+  setTimeout(() => void tickTrayProducts(), 10_000);
+
+  const timers: NodeJS.Timeout[] = [];
+  timers.push(setInterval(() => void tickAllpost(), EVERY_5_MIN));
+  timers.push(setInterval(() => void tickPrecodeOrders(), EVERY_30_MIN));
+  timers.push(setInterval(() => void tickTrayOrders(), EVERY_30_MIN));
+  timers.push(setInterval(() => void tickPrecodeProducts(), EVERY_3_HOURS));
+  timers.push(setInterval(() => void tickTrayProducts(), EVERY_3_HOURS));
+
+  // loop “keep alive” para permitir shutdown gracioso
+  while (!shuttingDown) {
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(1_000);
+  }
+
+  for (const t of timers) clearInterval(t);
+  console.log("[scheduler] aguardando jobs em andamento finalizarem...");
+  while (Array.from(JOB_LOCKS.values()).some(Boolean)) {
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(500);
+  }
+
+  await AppDataSource.destroy().catch(() => undefined);
+  console.log("[scheduler] finalizado.");
+}
+
+main().catch((err) => {
+  console.error("[scheduler] erro fatal:", err);
+  process.exit(1);
+});
+
+

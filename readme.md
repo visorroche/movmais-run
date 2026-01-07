@@ -1,4 +1,4 @@
-# Como rodar o serviço
+# Como rodar os comandos (jobs)
 
 1. Instale as dependências:
 
@@ -9,20 +9,60 @@ npm install
 2. Configure o arquivo `.env` com as variáveis do banco de dados PostgreSQL.
  - Você pode usar o arquivo `env.example` como base.
 
-3. Inicie o servidor de desenvolvimento:
-
-```bash
-npm run dev
-```
-
-O serviço ficará disponível na porta definida pela variável `PORT` no `.env` (padrão: 3000).
+3. Execute os comandos (jobs) ou o scheduler.
 
 ### Scripts úteis
 
 ```bash
 npm run build   # compila para ./dist
-npm run start   # roda ./dist com Node
+npm run start   # roda o scheduler (worker)
+npm run dev:scheduler   # compila e roda o scheduler (dev)
 ```
+
+### Rodando via Docker Compose
+
+Na raiz do repositório:
+
+```bash
+docker compose up -d --build
+```
+
+Isso sobe:
+
+- `postgres` (Postgres 16)
+- `script-bi-scheduler` (worker que roda os jobs recorrentes)
+
+Para logs:
+
+```bash
+docker compose logs -f script-bi-scheduler
+```
+
+### Scheduler (produção)
+
+Para garantir execução recorrente em produção (5min/30min/3h) para **todas as companies cadastradas**, rode o scheduler como um **processo dedicado**:
+
+- Ele consulta o banco para listar as companies que têm cada plataforma instalada (`company_platforms` + `platforms.slug`)
+- E executa os scripts já compilados em `dist/commands/...` para cada company
+- Possui trava por job para evitar sobreposição (se uma execução ainda estiver rodando, o tick é ignorado)
+
+Execução:
+
+```bash
+npm run build
+npm run start:scheduler
+```
+
+Recomendação em produção: rode o scheduler como **processo dedicado**. Exemplos comuns:
+
+- PM2:
+
+```bash
+pm2 start dist/scheduler.js --name script-bi-scheduler
+pm2 save
+```
+
+- systemd / Docker / Kubernetes: um serviço/worker separado rodando `node dist/scheduler.js`.
 
 ### Script Precode (pedidos)
 
