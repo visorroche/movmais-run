@@ -22,10 +22,10 @@ export const AppDataSource = new DataSource({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_DATABASE || '',
   // IMPORTANTE:
-  // Não habilite synchronize em banco com dados/tabelas já existentes.
-  // Isso pode causar ALTER/DROP indesejado (ex.: tentar recriar colunas em mudanças de tipo).
-  // Para desligar explicitamente em produção: TYPEORM_SYNC=false
-  synchronize: process.env.TYPEORM_SYNC === "false" ? false : true,
+  // Em produção, NUNCA use synchronize em banco com dados/tabelas existentes:
+  // isso pode gerar ALTER/DROP indesejado e/ou corrida entre processos (ADD COLUMN "já existe").
+  // Padrão: false. Para habilitar explicitamente (apenas dev): TYPEORM_SYNC=true
+  synchronize: process.env.TYPEORM_SYNC === "true",
   logging: false,
   namingStrategy: new SnakeNamingStrategy(),
   entities: [
