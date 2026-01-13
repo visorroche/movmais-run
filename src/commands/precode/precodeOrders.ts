@@ -196,7 +196,7 @@ async function main() {
     const tokenStr: string = token;
 
     const productApiCache = new Map<number, { raw: unknown; produto: Record<string, unknown> | null } | null>();
-    const productCache = new Map<number, Product>();
+    const productCache = new Map<string, Product>();
 
     async function fetchProductBySku(
       sku: number,
@@ -218,12 +218,13 @@ async function main() {
     }
 
     async function ensureProductBySku(sku: number, itObj: Record<string, unknown>): Promise<Product> {
-      const cached = productCache.get(sku);
+      const skuStr = String(sku);
+      const cached = productCache.get(skuStr);
       if (cached) return cached;
 
-      const existing = await productRepo.findOne({ where: { company: { id: companyRef.id }, sku } });
+      const existing = await productRepo.findOne({ where: { company: { id: companyRef.id }, sku: skuStr } });
       if (existing) {
-        productCache.set(sku, existing);
+        productCache.set(skuStr, existing);
         return existing;
       }
 
@@ -232,7 +233,7 @@ async function main() {
 
       const p = productRepo.create({
         company: companyRef,
-        sku,
+        sku: skuStr,
         name: (produto ? pickString(produto, "tituloCurto") ?? pickString(produto, "titulo") : null) ?? pickString(itObj, "descricaoProduto"),
         storeReference: (produto ? pickString(produto, "codigoReferenciaFabrica") : null) ?? pickString(itObj, "referenciaLoja"),
         brand: produto ? pickString(produto, "marca") : null,
@@ -249,7 +250,7 @@ async function main() {
       });
 
       const saved = await productRepo.save(p);
-      productCache.set(sku, saved);
+      productCache.set(skuStr, saved);
       return saved;
     }
 

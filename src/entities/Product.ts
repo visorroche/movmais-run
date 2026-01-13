@@ -12,8 +12,9 @@ export class Product {
   company!: Company;
 
   // sku do produto na plataforma (Precode sku; Tray product_id)
-  @Column({ type: "integer" })
-  sku!: number;
+  // SKU pode vir com valores grandes em integrações; manter como string para evitar overflow de int32 no Postgres.
+  @Column({ type: "varchar" })
+  sku!: string;
 
   // id do produto no ecommerce (no caso da Tray, é o mesmo `id` retornado no /web_api/products)
   @Column({ type: "integer", nullable: true })

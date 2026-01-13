@@ -127,7 +127,7 @@ async function main() {
     let page = 1;
     let pagesFetched = 0;
     const MAX_PAGES = 10_000; // safety cap para evitar loop infinito caso a API ignore paginação
-    const seenSkus = new Set<number>();
+    const seenSkus = new Set<string>();
 
     let processed = 0;
     let upserted = 0;
@@ -153,13 +153,14 @@ async function main() {
       for (const row of listArr) {
         const obj = asRecord(row);
         if (!obj) continue;
-        const sku = pickNumber(obj, "sku");
-        if (!sku) continue;
+        const skuNum = pickNumber(obj, "sku");
+        if (!skuNum) continue;
+        const sku = String(skuNum);
         if (seenSkus.has(sku)) continue;
         seenSkus.add(sku);
         newSkusInPage += 1;
 
-        const api = await fetchProductBySku(sku);
+        const api = await fetchProductBySku(skuNum);
         if (api?.produto) detailsFetched += 1;
         else detailsMissing += 1;
 

@@ -8,6 +8,7 @@
     "start": "node dist/scheduler.js",
     "start:scheduler": "node dist/scheduler.js",
     "dev:scheduler": "npm run build && npm run start:scheduler",
+    "dev": "npm run dev:scheduler",
     "script:precode:orders": "npm run build && node dist/commands/precode/precodeOrders.js",
     "script:precode:pedidos": "npm run script:precode:orders",
     "script:precode:products": "npm run build && node dist/commands/precode/precodeProducts.js",

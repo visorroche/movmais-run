@@ -233,7 +233,7 @@ async function main() {
         const ecommerceId = pickNumber(prod, "id");
         if (!ecommerceId) continue;
 
-        const sku = ecommerceId; // Tray product_id
+        const sku = String(ecommerceId); // Tray product_id (pode ser grande; manter como string)
         const refs = splitStoreReference(pickString(prod, "reference"));
 
         const weightGrams = pickString(prod, "weight");

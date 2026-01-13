@@ -29,8 +29,9 @@ export class FreightQuoteItem {
   @Column({ type: "varchar", nullable: true })
   partnerSku?: string | null;
 
-  @Column({ type: "integer", nullable: true })
-  partnerSkuId?: number | null; // idSku
+  // idSku pode vir muito grande (fora do range de int32); manter como string.
+  @Column({ type: "varchar", nullable: true })
+  partnerSkuId?: string | null; // idSku
 
   @Column({ type: "integer", nullable: true })
   quantity?: number | null; // qt

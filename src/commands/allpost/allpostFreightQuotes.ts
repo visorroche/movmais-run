@@ -60,19 +60,27 @@ function toNumericString(v: number | string | null): string | null {
   return String(n);
 }
 
-function parseProductSkuFromPartnerSku(partnerSku: string | null): number | null {
+function parseProductSkuFromPartnerSku(partnerSku: string | null): string | null {
   if (!partnerSku) return null;
   // AllPost sometimes sends sku like "253-1657". We want to match products.sku using the prefix (253).
   // Also seen: "371_1449" -> 371
   const prefix = partnerSku.split(/[-_]/, 1)[0]?.trim() ?? "";
   if (!/^\d+$/.test(prefix)) return null;
-  const n = Number(prefix);
-  return Number.isInteger(n) ? n : null;
+  return prefix;
 }
 
 function isNumericString(value: string | null): boolean {
   if (!value) return false;
   return /^\d+$/.test(value.trim());
+}
+
+function pickNumericString(obj: Record<string, unknown>, key: string): string | null {
+  const v = obj[key];
+  if (v === undefined || v === null || v === "") return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  // aceita apenas dígitos para SKU/IDs numéricos
+  return /^\d+$/.test(s) ? s : null;
 }
 
 function parseDate(value: string | null): Date | null {
@@ -197,10 +205,10 @@ async function main() {
     let skippedDuplicateOnInsert = 0;
     let invalidRows = 0;
 
-    const productCache = new Map<number, Product | null>();
+    const productCache = new Map<string, Product | null>();
     const productByReferenceCache = new Map<string, Product | null>();
 
-    async function findProductBySku(sku: number): Promise<Product | null> {
+    async function findProductBySku(sku: string): Promise<Product | null> {
       const cached = productCache.get(sku);
       if (cached !== undefined) return cached;
       const found = await productRepo.findOne({ where: { company: { id: companyRef.id }, sku } });
@@ -278,7 +286,7 @@ async function main() {
           if (!pObj) continue;
 
           const partnerSku = pickString(pObj, "sku");
-          const partnerSkuId = pickNumber(pObj, "idSku");
+          const partnerSkuIdStr = pickNumericString(pObj, "idSku");
 
           // Product linking strategy:
           // - If partnerSku has no "-" or "_" and is numeric > 1000, try matching by products.store_reference (reference).
@@ -294,7 +302,7 @@ async function main() {
           }
           if (!maybeProduct) {
             const skuPrefix = parseProductSkuFromPartnerSku(partnerSku);
-            const productSkuToMatch = skuPrefix ?? partnerSkuId;
+            const productSkuToMatch = skuPrefix ?? partnerSkuIdStr;
             maybeProduct = productSkuToMatch ? await findProductBySku(productSkuToMatch) : null;
           }
 
@@ -304,7 +312,7 @@ async function main() {
             product: maybeProduct ?? null,
             lineIndex: i,
             partnerSku,
-            partnerSkuId: partnerSkuId,
+            partnerSkuId: partnerSkuIdStr,
             quantity: pickNumber(pObj, "qt"),
             price: toNumericString(pickNumber(pObj, "preco") ?? pickString(pObj, "preco")),
             volumes: pickNumber(pObj, "volumes"),

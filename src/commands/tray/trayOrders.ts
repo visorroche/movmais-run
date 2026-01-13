@@ -460,18 +460,19 @@ async function main() {
     // payloads "crus" (respostas completas das requests), para logs/auditoria em Customer.raw
     const customerRawCache = new Map<string, unknown>();
     const productSoldCache = new Map<string, unknown>();
-    const productCache = new Map<number, Product>();
+    const productCache = new Map<string, Product>();
     const trayCustomStatusMap = parseTrayCustomStatusMap(cfg.status);
     const orderDetailCache = new Map<number, { date: string | null; hour: string | null; marketplaceCreated: string | null }>();
 
     async function ensureProductBySku(productSku: number, productSoldDetail: Record<string, unknown>, productSoldRaw: unknown) {
-      const cached = productCache.get(productSku);
+      const productSkuStr = String(productSku);
+      const cached = productCache.get(productSkuStr);
       if (cached) return cached;
 
-      const existing = await productRepo.findOne({ where: { company: { id: companyRef.id }, sku: productSku } });
+      const existing = await productRepo.findOne({ where: { company: { id: companyRef.id }, sku: productSkuStr } });
       if (existing) {
         // Regra: rotinas de orders NÃO atualizam cadastro de produto existente.
-        productCache.set(productSku, existing);
+        productCache.set(productSkuStr, existing);
         return existing;
       }
 
@@ -493,7 +494,7 @@ async function main() {
       const refs = splitStoreReference(pickString(productSoldDetail, "reference"));
       const p = productRepo.create({
         company: companyRef,
-        sku: productSku,
+        sku: productSkuStr,
         name: pickString(productSoldDetail, "name"),
         storeReference: refs.storeReference,
         externalReference: refs.externalReference,
@@ -511,7 +512,7 @@ async function main() {
       });
 
       const saved = await productRepo.save(p);
-      productCache.set(productSku, saved);
+      productCache.set(productSkuStr, saved);
       return saved;
     }
 
