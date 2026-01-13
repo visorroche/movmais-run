@@ -2,6 +2,8 @@ import "dotenv/config";
 import "reflect-metadata";
 
 import { spawn } from "node:child_process";
+import http from "node:http";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +17,74 @@ let shuttingDown = false;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readVersionFromScriptBi(): { version: string | null; file: string | null } {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+
+  const candidates = [
+    // 1) quando roda dentro de ./script-bi
+    path.resolve(process.cwd(), "version.txt"),
+    // 2) quando roda na raiz do repo
+    path.resolve(process.cwd(), "script-bi", "version.txt"),
+    // 3) quando roda a partir de ./script-bi/dist
+    path.resolve(__dirname, "..", "version.txt"),
+  ];
+
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const raw = fs.readFileSync(p, "utf8");
+      const version = String(raw).trim();
+      return { version: version || null, file: p };
+    } catch {
+      // tenta próximo candidato
+    }
+  }
+  return { version: null, file: null };
+}
+
+function startHttpServer() {
+  const portRaw = process.env.PORT || "3000";
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port <= 0) {
+    console.warn(`[scheduler] PORT inválido (${portRaw}); servidor HTTP não será iniciado.`);
+    return null;
+  }
+
+  const server = http.createServer((req, res) => {
+    const url = req.url || "/";
+    if (url === "/health") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (url === "/version") {
+      const { version, file } = readVersionFromScriptBi();
+      if (!version) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ version: null, error: "script-bi/version.txt não encontrado ou vazio", file }));
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ version }));
+      return;
+    }
+
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ message: "Not found" }));
+  });
+
+  server.listen(port, () => {
+    console.log(`[scheduler] HTTP server listening on :${port} (/health, /version)`);
+  });
+
+  return server;
 }
 
 function utcMidnight(date = new Date()): Date {
@@ -132,6 +202,8 @@ async function main() {
     console.log("[scheduler] SIGTERM recebido; finalizando...");
   });
 
+  const httpServer = startHttpServer();
+
   await ensureDb();
 
   // job: allpost freight quotes (a cada 5 min)
@@ -201,6 +273,11 @@ async function main() {
     // eslint-disable-next-line no-await-in-loop
     await sleep(500);
   }
+
+  await new Promise<void>((resolve) => {
+    if (!httpServer) return resolve();
+    httpServer.close(() => resolve());
+  });
 
   await AppDataSource.destroy().catch(() => undefined);
   console.log("[scheduler] finalizado.");
