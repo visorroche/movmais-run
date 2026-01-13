@@ -121,11 +121,11 @@ jobs:
             echo ""
             
             echo "📍 Testar acesso ao Run"
-            curl -s -I http://127.0.0.1:5004/ | head -3
+            curl -s -I http://127.0.0.1:3030/ | head -3
             echo ""
             
-            echo "📍 Verificar porta 5004 está aberta"
-            netstat -tlnp | grep 5004 || echo "⚠️ Porta 5004 não encontrada"
+            echo "📍 Verificar porta 3030 está aberta"
+            netstat -tlnp | grep 3030 || echo "⚠️ Porta 3030 não encontrada"
             echo ""
             
             echo "=========================================="
