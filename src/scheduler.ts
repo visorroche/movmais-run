@@ -66,12 +66,12 @@ function startHttpServer() {
       if (!version) {
         res.statusCode = 404;
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ version: null, error: "script-bi/version.txt não encontrado ou vazio", file }));
+        res.end(JSON.stringify({ version: null, project: "run", error: "script-bi/version.txt não encontrado ou vazio", file }));
         return;
       }
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ version }));
+      res.end(JSON.stringify({ version, project: "run" }));
       return;
     }
 
