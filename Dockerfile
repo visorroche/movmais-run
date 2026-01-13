@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+COPY version.txt ./version.txt
 COPY tsconfig.json ./
 COPY src ./src
 
