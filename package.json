@@ -14,7 +14,9 @@
     "script:precode:products": "npm run build && node dist/commands/precode/precodeProducts.js",
     "script:tray:orders": "npm run build && node dist/commands/tray/trayOrders.js",
     "script:tray:products": "npm run build && node dist/commands/tray/trayProducts.js",
-    "script:allpost:freight-quotes": "npm run build && node dist/commands/allpost/allpostFreightQuotes.js",
+    "script:allpost:quotes": "npm run build && node dist/commands/allpost/allpostFreightQuotes.js",
+    "script:allpost:backfill-freight-quote-options": "npm run build && node dist/commands/allpost/backfillFreightQuoteOptions.js",
+    "script:allpost:orders": "npm run build && node dist/commands/allpost/allpostFreightOrders.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

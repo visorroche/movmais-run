@@ -4,6 +4,9 @@
 -- Tabelas:
 -- - freight_quotes
 -- - freight_quotes_items
+-- - freight_quote_options
+-- - freight_orders
+-- - logs
 --
 -- Pré-requisitos (já existentes no seu banco):
 -- - companies(id)
@@ -77,6 +80,75 @@ CREATE TABLE IF NOT EXISTS freight_quotes_items (
   raw jsonb NULL
 );
 
+CREATE TABLE IF NOT EXISTS freight_quote_options (
+  id SERIAL PRIMARY KEY,
+
+  company_id integer NOT NULL,
+  freight_quote_id integer NOT NULL,
+
+  line_index integer NOT NULL,
+
+  shipping_value numeric(14,2) NULL,
+  shipping_cost  numeric(14,2) NULL,
+
+  carrier        varchar NULL,
+  warehouse_uf   varchar NULL,
+  warehouse_city varchar NULL,
+  warehouse_name varchar NULL,
+  shipping_name  varchar NULL,
+
+  carrier_deadline   integer NULL,
+  holiday_deadline   integer NULL,
+  warehouse_deadline integer NULL,
+  deadline           integer NULL,
+
+  has_stock boolean NULL,
+  raw jsonb NULL
+);
+
+CREATE TABLE IF NOT EXISTS freight_orders (
+  id SERIAL PRIMARY KEY,
+
+  external_id varchar NOT NULL,
+  order_date timestamptz NULL,
+  order_code varchar NULL,
+  store_name varchar NULL,
+  quote_id varchar NULL,
+  channel varchar NULL,
+
+  freight_amount numeric(14,2) NULL,
+  freight_cost numeric(14,2) NULL,
+  delta_quote numeric(14,2) NULL,
+
+  address varchar NULL,
+  address_zip varchar NULL,
+  address_state varchar NULL,
+  address_city varchar NULL,
+  address_neighborhood varchar NULL,
+  address_number varchar NULL,
+  address_complement varchar NULL,
+
+  estimated_delivery_date timestamptz NULL,
+  delivery_date timestamptz NULL,
+  delta_quote_delivery_date numeric(14,2) NULL,
+
+  raw jsonb NULL,
+
+  company_id integer NOT NULL,
+  platform_id integer NULL
+);
+
+CREATE TABLE IF NOT EXISTS logs (
+  id SERIAL PRIMARY KEY,
+  processed_at timestamptz NOT NULL,
+  date date NULL,
+  command varchar NOT NULL,
+  log jsonb NOT NULL,
+  errors jsonb NULL,
+  company_id integer NOT NULL,
+  platform_id integer NULL
+);
+
 -- Constraints/Indexes (idempotentes via DO)
 DO $$
 BEGIN
@@ -92,6 +164,24 @@ BEGIN
   ALTER TABLE freight_quotes_items
     ADD CONSTRAINT "UQ_freight_quotes_items_quote_id_line_index"
     UNIQUE (quote_id, line_index);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_quote_options
+    ADD CONSTRAINT "UQ_freight_quote_options_freight_quote_id_line_index"
+    UNIQUE (freight_quote_id, line_index);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_orders
+    ADD CONSTRAINT "UQ_freight_orders_company_id_platform_id_external_id"
+    UNIQUE (company_id, platform_id, external_id);
 EXCEPTION WHEN duplicate_object THEN
   NULL;
 END $$;
@@ -126,9 +216,63 @@ END $$;
 
 DO $$
 BEGIN
+  ALTER TABLE freight_quote_options
+    ADD CONSTRAINT "FK_freight_quote_options_company_id"
+    FOREIGN KEY (company_id) REFERENCES companies(id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_orders
+    ADD CONSTRAINT "FK_freight_orders_company_id"
+    FOREIGN KEY (company_id) REFERENCES companies(id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
   ALTER TABLE freight_quotes_items
     ADD CONSTRAINT "FK_freight_quotes_items_quote_id"
     FOREIGN KEY (quote_id) REFERENCES freight_quotes(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_quote_options
+    ADD CONSTRAINT "FK_freight_quote_options_freight_quote_id"
+    FOREIGN KEY (freight_quote_id) REFERENCES freight_quotes(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_orders
+    ADD CONSTRAINT "FK_freight_orders_platform_id"
+    FOREIGN KEY (platform_id) REFERENCES platforms(id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE logs
+    ADD CONSTRAINT "FK_logs_company_id"
+    FOREIGN KEY (company_id) REFERENCES companies(id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE logs
+    ADD CONSTRAINT "FK_logs_platform_id"
+    FOREIGN KEY (platform_id) REFERENCES platforms(id);
 EXCEPTION WHEN duplicate_object THEN
   NULL;
 END $$;

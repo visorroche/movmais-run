@@ -8,6 +8,7 @@ import { Plataform } from "../../entities/Plataform.js";
 import { CompanyPlataform } from "../../entities/CompanyPlataform.js";
 import { FreightQuote } from "../../entities/FreightQuote.js";
 import { FreightQuoteItem } from "../../entities/FreightQuoteItem.js";
+import { FreightQuoteOption } from "../../entities/FreightQuoteOption.js";
 import { Product } from "../../entities/Product.js";
 
 type Args = { company: number };
@@ -89,6 +90,18 @@ function parseDate(value: string | null): Date | null {
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
+function parseBooleanFromUnknown(v: unknown): boolean | null {
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v === "boolean") return v;
+  const s = String(v).trim().toLowerCase();
+  if (!s) return null;
+  if (s === "true" || s === "t" || s === "yes" || s === "y" || s === "sim") return true;
+  if (s === "false" || s === "f" || s === "no" || s === "n" || s === "nao" || s === "não") return false;
+  const n = Number(s);
+  if (Number.isFinite(n)) return n > 0;
+  return null;
+}
+
 function normalizeBearerToken(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return trimmed;
@@ -132,6 +145,7 @@ async function main() {
     const cpRepo = AppDataSource.getRepository(CompanyPlataform);
     const quoteRepo = AppDataSource.getRepository(FreightQuote);
     const quoteItemRepo = AppDataSource.getRepository(FreightQuoteItem);
+    const quoteOptionRepo = AppDataSource.getRepository(FreightQuoteOption);
     const productRepo = AppDataSource.getRepository(Product);
 
     const company = await companyRepo.findOne({ where: { id: args.company } });
@@ -277,6 +291,43 @@ async function main() {
         // eslint-disable-next-line no-await-in-loop
         const savedQuote = await quoteRepo.save(entity);
         inserted += 1;
+
+        // options: obj.opcoesEntrega[] (delivery_options)
+        const options = ensureArray(obj.opcoesEntrega);
+        for (let oi = 0; oi < options.length; oi += 1) {
+          const opt = options[oi];
+          const optObj = asRecord(opt);
+          if (!optObj) continue;
+
+          const dadosFrete = asRecord(optObj.dadosFrete ?? null) ?? {};
+          const prazoEntrega = asRecord(optObj.prazoEntrega ?? null) ?? {};
+
+          const optionEntity = quoteOptionRepo.create({
+            company: companyRef,
+            freightQuote: savedQuote,
+            lineIndex: oi,
+
+            shippingValue: toNumericString(pickNumber(optObj, "freteCobrar") ?? pickString(optObj, "freteCobrar")),
+            shippingCost: toNumericString(pickNumber(optObj, "freteReal") ?? pickString(optObj, "freteReal")),
+
+            carrier: pickString(dadosFrete, "transportadoraNome"),
+            warehouseUf: pickString(dadosFrete, "filialUF"),
+            warehouseCity: pickString(dadosFrete, "filialCidade"),
+            warehouseName: pickString(dadosFrete, "filialNome"),
+            shippingName: pickString(dadosFrete, "metodoEnvioNome"),
+
+            carrierDeadline: pickNumber(prazoEntrega, "prazoTransportadora"),
+            holidayDeadline: pickNumber(prazoEntrega, "prazoEntregaFeriado"),
+            warehouseDeadline: pickNumber(prazoEntrega, "prazoAdicionalFilial"),
+            deadline: pickNumber(optObj, "prazoEntregaTotal"),
+
+            hasStock: parseBooleanFromUnknown(optObj.possuiEstoque),
+            raw: optObj as unknown,
+          });
+
+          // eslint-disable-next-line no-await-in-loop
+          await quoteOptionRepo.save(optionEntity);
+        }
 
         // items: input.carrinho.produto[]
         const products = ensureArray(cart.produto);

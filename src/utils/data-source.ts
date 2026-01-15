@@ -12,6 +12,9 @@ import { OrderItem } from "../entities/OrderItem.js";
 import { Product } from "../entities/Product.js";
 import { FreightQuote } from "../entities/FreightQuote.js";
 import { FreightQuoteItem } from "../entities/FreightQuoteItem.js";
+import { FreightQuoteOption } from "../entities/FreightQuoteOption.js";
+import { FreightOrder } from "../entities/FreightOrder.js";
+import { IntegrationLog } from "../entities/IntegrationLog.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
 export const AppDataSource = new DataSource({
@@ -41,6 +44,9 @@ export const AppDataSource = new DataSource({
     OrderItem,
     FreightQuote,
     FreightQuoteItem,
+    FreightQuoteOption,
+    FreightOrder,
+    IntegrationLog,
   ],
   migrations: [],
   subscribers: [],
