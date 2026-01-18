@@ -9,6 +9,7 @@ import { Customer } from "../../entities/Customer.js";
 import { Order } from "../../entities/Order.js";
 import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapPrecodeStatus } from "../../utils/status/index.js";
 
 type Args = {
@@ -163,6 +164,9 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   await AppDataSource.initialize();
+  let companyRefForLog: Company | null = null;
+  let platformRefForLog: Plataform | null = null;
+  let processedForLog = 0;
   try {
     const companyRepo = AppDataSource.getRepository(Company);
     const plataformRepo = AppDataSource.getRepository(Plataform);
@@ -175,9 +179,11 @@ async function main() {
     const company = await companyRepo.findOne({ where: { id: args.company } });
     if (!company) throw new Error(`Company ${args.company} não encontrada.`);
     const companyRef: Company = company;
+    companyRefForLog = companyRef;
 
     const plataform = await plataformRepo.findOne({ where: { slug: "precode" } });
     if (!plataform) throw new Error('Plataform slug="precode" não encontrada. Cadastre e instale antes.');
+    platformRefForLog = plataform;
 
     const companyPlataform = await cpRepo.findOne({
       where: {
@@ -427,6 +433,59 @@ async function main() {
     }
 
     console.log(`[precode:orders] company=${args.company} range=${args.startDate}..${args.endDate} orders_processed=${processed}`);
+    processedForLog = processed;
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: args.startDate,
+          company: companyRef,
+          platform: plataform,
+          command: "Pedidos",
+          log: {
+            company: args.company,
+            platform: { id: plataform.id, slug: "precode" },
+            command: "Pedidos",
+            startDate: args.startDate,
+            endDate: args.endDate,
+            orders_processed: processedForLog,
+          },
+          errors: null,
+        }),
+      );
+    } catch (e) {
+      console.warn("[precode:orders] falha ao gravar log de integração:", e);
+    }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: args.startDate,
+          company: companyRefForLog ?? ({ id: args.company } as any),
+          platform: platformRefForLog ?? null,
+          command: "Pedidos",
+          log: {
+            company: args.company,
+            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "precode" } : null,
+            command: "Pedidos",
+            startDate: args.startDate,
+            endDate: args.endDate,
+            orders_processed: processedForLog,
+          },
+          errors:
+            err instanceof Error
+              ? { name: err.name, message: err.message, stack: err.stack ?? null }
+              : { message: String(err) },
+        }),
+      );
+    } catch (e) {
+      console.warn("[precode:orders] falha ao gravar log de erro:", e);
+    }
+    throw err;
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }

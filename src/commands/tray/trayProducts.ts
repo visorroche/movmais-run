@@ -6,6 +6,7 @@ import { Company } from "../../entities/Company.js";
 import { Plataform } from "../../entities/Plataform.js";
 import { CompanyPlataform } from "../../entities/CompanyPlataform.js";
 import { Product } from "../../entities/Product.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 
 const IS_TTY = Boolean(process.stdout.isTTY);
 
@@ -164,6 +165,10 @@ async function main() {
   const { company: companyId } = parseArgs(process.argv.slice(2));
   await AppDataSource.initialize();
 
+  let companyRefForLog: Company | null = null;
+  let platformRefForLog: Plataform | null = null;
+  let upsertedForLog = 0;
+
   try {
     const companyRepo = AppDataSource.getRepository(Company);
     const platformRepo = AppDataSource.getRepository(Plataform);
@@ -173,9 +178,11 @@ async function main() {
     const company = await companyRepo.findOne({ where: { id: companyId } });
     if (!company) throw new Error(`Company ${companyId} não encontrada.`);
     const companyRef: Company = company;
+    companyRefForLog = companyRef;
 
     const platform = await platformRepo.findOne({ where: { slug: "tray" } });
     if (!platform) throw new Error('Platform slug="tray" não encontrada. Cadastre e instale antes.');
+    platformRefForLog = platform;
 
     const companyPlatform = await cpRepo.findOne({
       where: { company: { id: companyRef.id }, platform: { id: platform.id } },
@@ -287,6 +294,56 @@ async function main() {
 
     if (IS_TTY) process.stdout.write("\n");
     console.log(`[tray:products] company=${companyId} upserted=${upserted}`);
+
+    upsertedForLog = upserted;
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRef,
+          platform,
+          command: "Produtos",
+          log: {
+            company: companyId,
+            platform: { id: platform.id, slug: "tray" },
+            command: "Produtos",
+            upserted: upsertedForLog,
+          },
+          errors: null,
+        }),
+      );
+    } catch (e) {
+      console.warn("[tray:products] falha ao gravar log de integração:", e);
+    }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRefForLog ?? ({ id: companyId } as any),
+          platform: platformRefForLog ?? null,
+          command: "Produtos",
+          log: {
+            company: companyId,
+            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
+            command: "Produtos",
+            upserted: upsertedForLog,
+          },
+          errors:
+            err instanceof Error
+              ? { name: err.name, message: err.message, stack: err.stack ?? null }
+              : { message: String(err) },
+        }),
+      );
+    } catch (e) {
+      console.warn("[tray:products] falha ao gravar log de erro:", e);
+    }
+    throw err;
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }

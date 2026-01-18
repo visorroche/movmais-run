@@ -10,6 +10,7 @@ import { FreightQuote } from "../../entities/FreightQuote.js";
 import { FreightQuoteItem } from "../../entities/FreightQuoteItem.js";
 import { FreightQuoteOption } from "../../entities/FreightQuoteOption.js";
 import { Product } from "../../entities/Product.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 
 type Args = { company: number };
 
@@ -139,6 +140,16 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   await AppDataSource.initialize();
 
+  let companyRefForLog: Company | null = null;
+  let platformRefForLog: Plataform | null = null;
+  let insertedForLog = 0;
+  let skippedExistingForLog = 0;
+  let skippedDuplicateForLog = 0;
+  let invalidRowsForLog = 0;
+  let pagesFetchedForLog = 0;
+  let totalApiForLog = 0;
+  let uniqueQuoteIdForLog = 0;
+
   try {
     const companyRepo = AppDataSource.getRepository(Company);
     const platformRepo = AppDataSource.getRepository(Plataform);
@@ -147,13 +158,16 @@ async function main() {
     const quoteItemRepo = AppDataSource.getRepository(FreightQuoteItem);
     const quoteOptionRepo = AppDataSource.getRepository(FreightQuoteOption);
     const productRepo = AppDataSource.getRepository(Product);
+    const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
 
     const company = await companyRepo.findOne({ where: { id: args.company } });
     if (!company) throw new Error(`Company ${args.company} não encontrada.`);
     const companyRef: Company = company;
+    companyRefForLog = companyRef;
 
     const platform = await platformRepo.findOne({ where: { slug: "allpost" } });
     if (!platform) throw new Error('Plataform slug="allpost" não encontrada. Cadastre e instale antes.');
+    platformRefForLog = platform;
 
     const companyPlatform = await cpRepo.findOne({
       where: { company: { id: company.id }, platform: { id: platform.id } },
@@ -392,6 +406,75 @@ async function main() {
     console.log(
       `[allpost:freight-quotes] company=${args.company} limit=${limit} pages_fetched=${page - 1} total_api=${rows.length} unique_quote_id=${byQuoteId.size} inserted=${inserted} skipped_existing=${skippedExisting} skipped_duplicate_on_insert=${skippedDuplicateOnInsert} invalid_rows=${invalidRows}`,
     );
+
+    // snapshot p/ log
+    insertedForLog = inserted;
+    skippedExistingForLog = skippedExisting;
+    skippedDuplicateForLog = skippedDuplicateOnInsert;
+    invalidRowsForLog = invalidRows;
+    pagesFetchedForLog = page - 1;
+    totalApiForLog = rows.length;
+    uniqueQuoteIdForLog = byQuoteId.size;
+
+    try {
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRef,
+          platform,
+          command: "Cotações",
+          log: {
+            company: args.company,
+            platform: { id: platform.id, slug: "allpost" },
+            command: "Cotações",
+            limit,
+            pages_fetched: pagesFetchedForLog,
+            total_api: totalApiForLog,
+            unique_quote_id: uniqueQuoteIdForLog,
+            inserted: insertedForLog,
+            skipped_existing: skippedExistingForLog,
+            skipped_duplicate_on_insert: skippedDuplicateForLog,
+            invalid_rows: invalidRowsForLog,
+          },
+          errors: null,
+        }),
+      );
+    } catch (e) {
+      console.warn("[allpost:freight-quotes] falha ao gravar log de integração:", e);
+    }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRefForLog ?? ({ id: args.company } as any),
+          platform: platformRefForLog ?? null,
+          command: "Cotações",
+          log: {
+            company: args.company,
+            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "allpost" } : null,
+            command: "Cotações",
+            inserted: insertedForLog,
+            skipped_existing: skippedExistingForLog,
+            skipped_duplicate_on_insert: skippedDuplicateForLog,
+            invalid_rows: invalidRowsForLog,
+            pages_fetched: pagesFetchedForLog,
+            total_api: totalApiForLog,
+            unique_quote_id: uniqueQuoteIdForLog,
+          },
+          errors:
+            err instanceof Error
+              ? { name: err.name, message: err.message, stack: err.stack ?? null }
+              : { message: String(err) },
+        }),
+      );
+    } catch (e) {
+      console.warn("[allpost:freight-quotes] falha ao gravar log de erro:", e);
+    }
+    throw err;
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }

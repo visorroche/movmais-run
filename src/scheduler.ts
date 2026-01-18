@@ -197,9 +197,14 @@ async function runForCompanies(platformSlug: string, scriptRel: string, makeArgs
     if (shuttingDown) break;
     const label = `${platformSlug} company=${companyId} script=${scriptRel}`;
     console.log(`[scheduler] executando ${label}`);
+    // Importante: se UMA company falhar, não deve interromper as demais.
     // Espaça um pouco para evitar rajadas (especialmente em produção)
-    // eslint-disable-next-line no-await-in-loop
-    await runNodeScript(scriptPath, makeArgs(companyId), label);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await runNodeScript(scriptPath, makeArgs(companyId), label);
+    } catch (err) {
+      console.error(`[scheduler] erro ao executar ${label}:`, err);
+    }
     // eslint-disable-next-line no-await-in-loop
     await sleep(250);
   }

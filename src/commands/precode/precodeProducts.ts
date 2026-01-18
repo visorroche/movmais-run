@@ -6,6 +6,7 @@ import { Company } from "../../entities/Company.js";
 import { Plataform } from "../../entities/Plataform.js";
 import { CompanyPlataform } from "../../entities/CompanyPlataform.js";
 import { Product } from "../../entities/Product.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 
 type Args = { company: number };
 
@@ -77,6 +78,15 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   await AppDataSource.initialize();
 
+  let companyRefForLog: Company | null = null;
+  let platformRefForLog: Plataform | null = null;
+  let processedForLog = 0;
+  let upsertedForLog = 0;
+  let pagesFetchedForLog = 0;
+  let detailsFetchedForLog = 0;
+  let detailsMissingForLog = 0;
+  let uniqueSkusForLog = 0;
+
   try {
     const companyRepo = AppDataSource.getRepository(Company);
     const plataformRepo = AppDataSource.getRepository(Plataform);
@@ -86,9 +96,11 @@ async function main() {
     const company = await companyRepo.findOne({ where: { id: args.company } });
     if (!company) throw new Error(`Company ${args.company} não encontrada.`);
     const companyRef: Company = company;
+    companyRefForLog = companyRef;
 
     const plataform = await plataformRepo.findOne({ where: { slug: "precode" } });
     if (!plataform) throw new Error('Plataform slug="precode" não encontrada. Cadastre e instale antes.');
+    platformRefForLog = plataform;
 
     const companyPlataform = await cpRepo.findOne({
       where: { company: { id: companyRef.id }, platform: { id: plataform.id } },
@@ -252,6 +264,71 @@ async function main() {
     console.log(
       `[precode:products] company=${args.company} pages_fetched=${pagesFetched} processed=${processed} upserted=${upserted} details_fetched=${detailsFetched} details_missing=${detailsMissing} unique_skus=${seenSkus.size}`,
     );
+
+    processedForLog = processed;
+    upsertedForLog = upserted;
+    pagesFetchedForLog = pagesFetched;
+    detailsFetchedForLog = detailsFetched;
+    detailsMissingForLog = detailsMissing;
+    uniqueSkusForLog = seenSkus.size;
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRef,
+          platform: plataform,
+          command: "Produtos",
+          log: {
+            company: args.company,
+            platform: { id: plataform.id, slug: "precode" },
+            command: "Produtos",
+            pages_fetched: pagesFetchedForLog,
+            processed: processedForLog,
+            upserted: upsertedForLog,
+            details_fetched: detailsFetchedForLog,
+            details_missing: detailsMissingForLog,
+            unique_skus: uniqueSkusForLog,
+          },
+          errors: null,
+        }),
+      );
+    } catch (e) {
+      console.warn("[precode:products] falha ao gravar log de integração:", e);
+    }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRefForLog ?? ({ id: args.company } as any),
+          platform: platformRefForLog ?? null,
+          command: "Produtos",
+          log: {
+            company: args.company,
+            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "precode" } : null,
+            command: "Produtos",
+            pages_fetched: pagesFetchedForLog,
+            processed: processedForLog,
+            upserted: upsertedForLog,
+            details_fetched: detailsFetchedForLog,
+            details_missing: detailsMissingForLog,
+            unique_skus: uniqueSkusForLog,
+          },
+          errors:
+            err instanceof Error
+              ? { name: err.name, message: err.message, stack: err.stack ?? null }
+              : { message: String(err) },
+        }),
+      );
+    } catch (e) {
+      console.warn("[precode:products] falha ao gravar log de erro:", e);
+    }
+    throw err;
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }

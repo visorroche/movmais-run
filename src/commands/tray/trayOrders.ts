@@ -9,6 +9,7 @@ import { Customer } from "../../entities/Customer.js";
 import { Order } from "../../entities/Order.js";
 import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapTrayStatus, parseTrayCustomStatusMap } from "../../utils/status/index.js";
 
 const IS_TTY = Boolean(process.stdout.isTTY);
@@ -377,6 +378,11 @@ async function main() {
   }
 
   await AppDataSource.initialize();
+  let companyRefForLog: Company | null = null;
+  let platformRefForLog: Plataform | null = null;
+  let processedOrdersForLog = 0;
+  let createdCustomersForLog = 0;
+
   try {
     const companyRepo = AppDataSource.getRepository(Company);
     const plataformRepo = AppDataSource.getRepository(Plataform);
@@ -389,9 +395,11 @@ async function main() {
     const companyEntity = await companyRepo.findOne({ where: { id: companyIdNum } });
     if (!companyEntity) throw new Error(`Company ${companyIdNum} não encontrada.`);
     const companyRef: Company = companyEntity;
+    companyRefForLog = companyRef;
 
     const platform = await plataformRepo.findOne({ where: { slug: "tray" } });
     if (!platform) throw new Error('Platform slug="tray" não encontrada. Cadastre e instale antes.');
+    platformRefForLog = platform;
 
     const companyPlatform = await cpRepo.findOne({
       where: { company: { id: companyEntity.id }, platform: { id: platform.id } },
@@ -819,6 +827,63 @@ async function main() {
     } else {
       console.log("[tray:orders] não foi necessário criar colunas novas exclusivas da Tray (usamos jsonb/raw para o restante).");
     }
+
+    processedOrdersForLog = processedOrders;
+    createdCustomersForLog = createdCustomers;
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: formatDate(start),
+          company: companyRef,
+          platform,
+          command: "Pedidos",
+          log: {
+            company: companyIdNum,
+            platform: { id: platform.id, slug: "tray" },
+            command: "Pedidos",
+            startDate: formatDate(start),
+            endDate: formatDate(end),
+            orders_processed: processedOrdersForLog,
+            customers_created: createdCustomersForLog,
+          },
+          errors: null,
+        }),
+      );
+    } catch (e) {
+      console.warn("[tray:orders] falha ao gravar log de integração:", e);
+    }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: formatDate(start),
+          company: companyRefForLog ?? ({ id: companyIdNum } as any),
+          platform: platformRefForLog ?? null,
+          command: "Pedidos",
+          log: {
+            company: companyIdNum,
+            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
+            command: "Pedidos",
+            startDate: formatDate(start),
+            endDate: formatDate(end),
+            orders_processed: processedOrdersForLog,
+            customers_created: createdCustomersForLog,
+          },
+          errors:
+            err instanceof Error
+              ? { name: err.name, message: err.message, stack: err.stack ?? null }
+              : { message: String(err) },
+        }),
+      );
+    } catch (e) {
+      console.warn("[tray:orders] falha ao gravar log de erro:", e);
+    }
+    throw err;
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }
