@@ -323,16 +323,21 @@ function parseDateTimeFromSql(value: string | null): Date | null {
   return parseDateTimeFromYmdHms(m[1] ?? null, m[2] ?? null);
 }
 
+function normalizeTimeHms(value: string | null): string | null {
+  const t = (value ?? "").trim();
+  return /^\d{2}:\d{2}:\d{2}$/.test(t) ? t : null;
+}
+
 function parseDateTimeFromYmdHms(dateYmd: string | null, timeHms: string | null): Date | null {
   if (!dateYmd) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateYmd)) return null;
   const [y, m, d] = dateYmd.split("-").map((x) => Number(x));
   if (!y || !m || !d) return null;
 
-  const t = (timeHms ?? "").trim();
-  if (!/^\d{2}:\d{2}:\d{2}$/.test(t)) return parseDateFromYmd(dateYmd);
+  const t = normalizeTimeHms(timeHms);
+  if (!t) return null;
   const parts = t.split(":");
-  if (parts.length !== 3) return parseDateFromYmd(dateYmd);
+  if (parts.length !== 3) return null;
   const hh = Number(parts[0]);
   const mm = Number(parts[1]);
   const ss = Number(parts[2]);
@@ -347,7 +352,7 @@ function parseDateTimeFromYmdHms(dateYmd: string | null, timeHms: string | null)
     ss < 0 ||
     ss > 59
   ) {
-    return parseDateFromYmd(dateYmd);
+    return null;
   }
   const dt = new Date(y, m - 1, d, hh, mm, ss, 0);
   return Number.isNaN(dt.getTime()) ? null : dt;
@@ -479,7 +484,10 @@ async function main() {
     const productSoldCache = new Map<string, unknown>();
     const productCache = new Map<string, Product>();
     const trayCustomStatusMap = parseTrayCustomStatusMap(cfg.status);
-    const orderDetailCache = new Map<number, { date: string | null; hour: string | null; marketplaceCreated: string | null }>();
+    const orderDetailCache = new Map<
+      number,
+      { date: string | null; hour: string | null; marketplaceCreated: string | null; modified: string | null }
+    >();
 
     async function ensureProductBySku(productSku: number, productSoldDetail: Record<string, unknown>, productSoldRaw: unknown) {
       const productSkuStr = String(productSku);
@@ -649,9 +657,12 @@ async function main() {
           if (mo0) createdSql = pickString(mo0, "created");
 
           let orderDate = parseDateTimeFromSql(createdSql);
-          // 2) Se a listagem trouxer hour, usa date+hour
+          // 2) Se a listagem trouxer hour válido, usa date+hour.
+          // Importante: NÃO cair para 00:00:00 quando "hour" não vier na listagem,
+          // pois isso impediria o fallback que busca o detalhe do pedido (onde o hour costuma existir).
           if (!orderDate) {
-            orderDate = parseDateTimeFromYmdHms(ymd, pickString(orderObj, "hour"));
+            const hourFromList = normalizeTimeHms(pickString(orderObj, "hour"));
+            if (hourFromList) orderDate = parseDateTimeFromYmdHms(ymd, hourFromList);
           }
           // 3) Fallback: buscar detalhe do pedido para tentar pegar "hour"
           if (!orderDate) {
@@ -659,6 +670,7 @@ async function main() {
             let dateFromDetail: string | null = cached?.date ?? null;
             let hourFromDetail: string | null = cached?.hour ?? null;
             let createdFromDetail: string | null = cached?.marketplaceCreated ?? null;
+            let modifiedFromDetail: string | null = cached?.modified ?? null;
 
             if (!cached) {
               currentAction = `buscando detalhe do pedido ${id}`;
@@ -668,16 +680,25 @@ async function main() {
               const det = asRecord(root.Order) ?? asRecord(root.order) ?? root;
               dateFromDetail = normalizeDateString(pickString(det, "date"));
               hourFromDetail = pickString(det, "hour");
+              modifiedFromDetail = pickString(det, "modified");
               const detMoArr = ensureArray((det as any)?.MarketplaceOrder);
               const detMo0 = detMoArr.length ? asRecord(detMoArr[0]) : null;
               createdFromDetail = detMo0 ? pickString(detMo0, "created") : null;
-              orderDetailCache.set(id, { date: dateFromDetail, hour: hourFromDetail, marketplaceCreated: createdFromDetail });
+              orderDetailCache.set(id, {
+                date: dateFromDetail,
+                hour: hourFromDetail,
+                marketplaceCreated: createdFromDetail,
+                modified: modifiedFromDetail,
+              });
             }
 
+            const hourFromDetailHms = normalizeTimeHms(hourFromDetail);
             orderDate =
               parseDateTimeFromSql(createdFromDetail) ??
-              parseDateTimeFromYmdHms(dateFromDetail ?? ymd, hourFromDetail) ??
-              parseDateFromYmd(dateFromDetail ?? ymd);
+              (hourFromDetailHms ? parseDateTimeFromYmdHms(dateFromDetail ?? ymd, hourFromDetailHms) : null) ??
+              // último fallback para não salvar 00:00:00 (ex.: quando hour não vem por algum motivo)
+              parseDateTimeFromSql(modifiedFromDetail) ??
+              parseDateTimeFromSql(pickString(orderObj, "modified"));
           }
 
           order.orderDate = orderDate;
