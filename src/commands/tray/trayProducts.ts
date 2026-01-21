@@ -263,12 +263,12 @@ async function main() {
         entity.name = pickString(prod, "name");
         entity.storeReference = refs.storeReference;
         entity.externalReference = refs.externalReference;
-        entity.brand = pickString(prod, "brand");
+        if (!entity.manualAttributesLocked) entity.brand = pickString(prod, "brand");
         entity.brandId = pickNumber(prod, "brand_id");
-        entity.model = pickString(prod, "model");
+        if (!entity.manualAttributesLocked) entity.model = pickString(prod, "model");
         entity.ncm = pickString(prod, "ncm");
         // Campo disponível no catálogo da Tray (mais confiável do que inferências em orders)
-        entity.category = pickString(prod, "category_name");
+        if (!entity.manualAttributesLocked) entity.category = pickString(prod, "category_name");
         entity.weight = toNumericString(weightKg);
         entity.lengthCm = toNumericString(pickNumber(prod, "length") ?? pickString(prod, "length"));
         entity.width = toNumericString(pickNumber(prod, "width") ?? pickString(prod, "width"));

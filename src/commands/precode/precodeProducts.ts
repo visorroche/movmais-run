@@ -58,6 +58,22 @@ function toNumericString(v: number | string | null): string | null {
   return String(n);
 }
 
+function pickPrecodeMainPhoto(produto: Record<string, unknown> | null, skuNum: number): string | null {
+  if (!produto) return null;
+  const attrs = ensureArray(produto.atributos);
+  if (!attrs.length) return null;
+
+  const matches = attrs
+    .map((x) => asRecord(x))
+    .filter(Boolean) as Array<Record<string, unknown>>;
+
+  const bySku = matches.find((a) => pickNumber(a, "sku") === skuNum) ?? null;
+  const fallback = matches[0] ?? null;
+  const src = bySku ?? fallback;
+  if (!src) return null;
+  return pickString(src, "fotoprincipal");
+}
+
 async function httpGetJson(url: string, token: string): Promise<unknown> {
   const resp = await fetch(url, {
     method: "GET",
@@ -194,7 +210,6 @@ async function main() {
         entity.slug = entity.slug ?? null;
         entity.brandId = entity.brandId ?? null;
         entity.categoryId = entity.categoryId ?? null;
-        entity.photo = entity.photo ?? null;
         entity.url = entity.url ?? null;
 
         // Preferimos o detalhamento ProdutoSku; fallback para ListaProduto
@@ -209,8 +224,14 @@ async function main() {
           entity.storeReference ??
           null;
 
+        // Foto principal vem em produto.atributos[].fotoprincipal (por variação/SKU)
+        // Não travamos por manualAttributesLocked: foto pode/deve acompanhar integrações.
+        entity.photo = pickPrecodeMainPhoto(produto, skuNum) ?? entity.photo ?? null;
+
+        if (!entity.manualAttributesLocked) {
         entity.brand = (produto ? pickString(produto, "marca") : null) ?? entity.brand ?? null;
         entity.model = (produto ? pickString(produto, "modelo") : null) ?? entity.model ?? null;
+        }
 
         entity.weight =
           toNumericString(produto ? (pickNumber(produto, "peso") ?? pickString(produto, "peso")) : null) ??
@@ -233,10 +254,12 @@ async function main() {
 
         entity.ncm =
           (produto ? (pickString(produto, "NCM") ?? pickString(produto, "ncm")) : null) ?? entity.ncm ?? null;
+        if (!entity.manualAttributesLocked) {
         entity.category =
           (produto ? pickString(produto, "categoria") : null) ?? listCategory ?? entity.category ?? null;
         entity.subcategory = (produto ? pickString(produto, "subcategoria") : null) ?? entity.subcategory ?? null;
         entity.finalCategory = (produto ? pickString(produto, "categoriaFinal") : null) ?? entity.finalCategory ?? null;
+        }
 
         // payload cru: guardamos lista + detalhes (quando houver)
         entity.raw = { list: obj, detail: api?.raw ?? null };

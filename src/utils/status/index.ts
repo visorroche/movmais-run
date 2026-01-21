@@ -14,6 +14,8 @@ export const ORDER_STATUSES = [
   "devolvido",
   "cancelado",
   "frete não atendido",
+  "desmembrado",
+  "bloqueado",
 ] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
@@ -38,6 +40,11 @@ export function mapPrecodeStatus(raw: string): OrderStatus {
     entregue: "entregue",
     devolvido: "devolvido",
     cancelado: "cancelado",
+    bloqueado: "bloqueado",
+    retornando: "devolvido",
+    retornou: "devolvido",
+    "solicitado devolução": "devolvido",
+    desmembrado: "desmembrado",
   };
 
   const mapped = mapping[key];

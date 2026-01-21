@@ -68,6 +68,15 @@ function parseIsoDate(date: string): Date {
   return new Date(`${date}T00:00:00.000Z`);
 }
 
+function ymdToDate(value: string): Date | null {
+  const s = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split("-").map((x) => Number(x));
+  if (!y || !m || !d) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
 function addDaysUtc(d: Date, days: number): Date {
   const out = new Date(d.getTime());
   out.setUTCDate(out.getUTCDate() + days);
@@ -836,7 +845,7 @@ async function main() {
       await integrationLogRepo.save(
         integrationLogRepo.create({
           processedAt: new Date(),
-          date: formatDate(start),
+          date: ymdToDate(formatDate(start)),
           company: companyRef,
           platform,
           command: "Pedidos",
@@ -861,7 +870,7 @@ async function main() {
       await integrationLogRepo.save(
         integrationLogRepo.create({
           processedAt: new Date(),
-          date: formatDate(start),
+          date: ymdToDate(formatDate(start)),
           company: companyRefForLog ?? ({ id: companyIdNum } as any),
           platform: platformRefForLog ?? null,
           command: "Pedidos",

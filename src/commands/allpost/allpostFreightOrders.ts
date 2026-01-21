@@ -35,6 +35,16 @@ function extractYmd(value: string): string | null {
   return m?.[1] ?? null;
 }
 
+function ymdToDate(value: string | null): Date | null {
+  if (!value) return null;
+  const s = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const [y, m, d] = s.split("-").map((x) => Number(x));
+  if (!y || !m || !d) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0));
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
 function parseArgs(argv: string[]): Args {
   const raw = new Map<string, string>();
   for (const a of argv) {
@@ -652,7 +662,7 @@ async function main() {
       await integrationLogRepo.save(
         integrationLogRepo.create({
           processedAt: new Date(),
-          date: filterDate ?? null,
+          date: ymdToDate(filterDate),
           company: companyRef,
           platform: platformRef,
           command: "Pedidos",
@@ -691,7 +701,7 @@ async function main() {
       await integrationLogRepo.save(
         integrationLogRepo.create({
           processedAt: new Date(),
-          date: filterDateForLog ?? null,
+          date: ymdToDate(filterDateForLog),
           company: companyRefForLog ?? ({ id: args.company } as any),
           platform: platformRefForLog ?? null,
           command: "Pedidos",
