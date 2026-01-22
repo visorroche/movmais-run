@@ -59,35 +59,164 @@ function startHttpServer() {
     return null;
   }
 
-  const server = http.createServer((req, res) => {
-    const url = req.url || "/";
-    if (url === "/health") {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ ok: true }));
-      return;
+  const RUN_LOCKS = new Map<string, boolean>();
+  const requireRunToken = String(process.env.SCHEDULER_RUN_TOKEN ?? "").trim();
+
+  const json = (res: http.ServerResponse, statusCode: number, body: unknown) => {
+    res.statusCode = statusCode;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(body));
+  };
+
+  const readJsonBody = async (req: http.IncomingMessage, maxBytes = 64_000): Promise<any> => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of req) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      total += buf.length;
+      if (total > maxBytes) throw new Error("Body muito grande.");
+      chunks.push(buf);
     }
-    if (url === "/version") {
+    const text = Buffer.concat(chunks).toString("utf8");
+    if (!text.trim()) return {};
+    return JSON.parse(text);
+  };
+
+  const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+  const SCRIPT_MAP: Record<
+    string,
+    Record<
+      string,
+      { scriptRel: string; buildArgs: (p: { companyId: number; startDate?: string; endDate?: string; onlyInsert?: boolean }) => string[] }
+    >
+  > = {
+    tray: {
+      orders: {
+        scriptRel: "commands/tray/trayOrders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+      products: {
+        scriptRel: "commands/tray/trayProducts.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+    },
+    precode: {
+      orders: {
+        scriptRel: "commands/precode/precodeOrders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+      products: {
+        scriptRel: "commands/precode/precodeProducts.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+    },
+    allpost: {
+      quotes: {
+        scriptRel: "commands/allpost/allpostFreightQuotes.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      orders: {
+        scriptRel: "commands/allpost/allpostFreightOrders.js",
+        buildArgs: ({ companyId, startDate, endDate }) => {
+          // este script usa start/end em formato ISO-like (UTC). Se vierem YYYY-MM-DD, convertemos para o formato do script.
+          // Aqui aceitamos passar como veio, assumindo que quem chama já manda no formato esperado.
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          return argv;
+        },
+      },
+    },
+  };
+
+  const server = http.createServer((req, res) => {
+    const parsed = new URL(req.url || "/", "http://localhost");
+    const pathname = (parsed.pathname || "/").replace(/\/+$/, "") || "/";
+    if (pathname === "/health") return json(res, 200, { ok: true });
+
+    if (pathname === "/version") {
       const { version, file } = readVersionFromScriptBi();
       if (!version) {
-        res.statusCode = 404;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ version: null, project: "run", error: "script-bi/version.txt não encontrado ou vazio", file }));
-        return;
+        return json(res, 404, { version: null, project: "run", error: "script-bi/version.txt não encontrado ou vazio", file });
       }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ version, project: "run" }));
+      return json(res, 200, { version, project: "run" });
+    }
+
+    if (pathname === "/run-script" && req.method === "POST") {
+      (async () => {
+        if (requireRunToken) {
+          const got = String(req.headers["x-run-token"] ?? "").trim();
+          if (got !== requireRunToken) return json(res, 401, { message: "Não autorizado." });
+        }
+
+        const body = await readJsonBody(req);
+        const platform = String(body?.platform ?? "").trim();
+        const script = String(body?.script ?? "").trim();
+        const companyId = Number(body?.company_id ?? body?.companyId);
+        const startDate = body?.start_date ? String(body.start_date).trim() : undefined;
+        const endDate = body?.end_date ? String(body.end_date).trim() : undefined;
+        const onlyInsert = Boolean(body?.only_insert ?? body?.onlyInsert);
+
+        if (!platform || !SCRIPT_MAP[platform]) return json(res, 400, { message: "platform inválido." });
+        if (!script || !SCRIPT_MAP[platform]?.[script]) return json(res, 400, { message: "script inválido." });
+        if (!Number.isInteger(companyId) || companyId <= 0) return json(res, 400, { message: "company_id inválido." });
+        if (startDate !== undefined && !isYmd(startDate)) return json(res, 400, { message: "start_date inválido (YYYY-MM-DD)." });
+        if (endDate !== undefined && !isYmd(endDate)) return json(res, 400, { message: "end_date inválido (YYYY-MM-DD)." });
+
+        const lockKey = `${platform}:${script}:${companyId}`;
+        if (RUN_LOCKS.get(lockKey)) return json(res, 409, { message: "Já existe uma execução em andamento para esses parâmetros." });
+
+        const { scriptRel, buildArgs } = SCRIPT_MAP[platform][script];
+        const scriptPath = resolveDistScript(scriptRel);
+        const params: { companyId: number; startDate?: string; endDate?: string; onlyInsert?: boolean } = {
+          companyId,
+          onlyInsert,
+        };
+        if (startDate) params.startDate = startDate;
+        if (endDate) params.endDate = endDate;
+        const argv = buildArgs(params);
+        const label = `forced platform=${platform} company=${companyId} script=${scriptRel}`;
+
+        RUN_LOCKS.set(lockKey, true);
+        const child = spawn(process.execPath, [scriptPath, ...argv], { stdio: "inherit", env: process.env });
+        const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        console.log(`[scheduler] forçado iniciado run_id=${runId} ${label} argv=${argv.join(" ")}`);
+
+        child.on("exit", (code) => {
+          RUN_LOCKS.set(lockKey, false);
+          console.log(`[scheduler] forçado finalizado run_id=${runId} exit_code=${code ?? "null"} ${label}`);
+        });
+        child.on("error", (err) => {
+          RUN_LOCKS.set(lockKey, false);
+          console.error(`[scheduler] forçado erro run_id=${runId} ${label}:`, err);
+        });
+
+        return json(res, 202, { ok: true, message: "script iniciado", run_id: runId, pid: child.pid ?? null });
+      })().catch((err) => {
+        console.error("[scheduler] /run-script erro:", err);
+        return json(res, 500, { message: "Erro ao iniciar script.", error: String((err as any)?.message ?? err) });
+      });
       return;
     }
 
-    res.statusCode = 404;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ message: "Not found" }));
+    return json(res, 404, { message: "Not found" });
   });
 
   server.listen(port, () => {
-    console.log(`[scheduler] HTTP server listening on :${port} (/health, /version)`);
+    console.log(`[scheduler] HTTP server listening on :${port} (/health, /version, /run-script)`);
   });
 
   return server;
@@ -192,22 +321,35 @@ async function runForCompanies(platformSlug: string, scriptRel: string, makeArgs
     return;
   }
 
+  const DEFAULT_CONCURRENCY = 5;
+  const concurrencyRaw = process.env.SCHEDULER_COMPANY_CONCURRENCY;
+  const concurrencyParsed = concurrencyRaw ? Number(concurrencyRaw) : DEFAULT_CONCURRENCY;
+  const concurrency = Number.isInteger(concurrencyParsed) && concurrencyParsed > 0 ? concurrencyParsed : DEFAULT_CONCURRENCY;
+
   const scriptPath = resolveDistScript(scriptRel);
-  for (const companyId of ids) {
-    if (shuttingDown) break;
-    const label = `${platformSlug} company=${companyId} script=${scriptRel}`;
-    console.log(`[scheduler] executando ${label}`);
-    // Importante: se UMA company falhar, não deve interromper as demais.
-    // Espaça um pouco para evitar rajadas (especialmente em produção)
-    try {
+
+  const queue = ids.slice(); // já vem ordenado em listCompanyIdsForPlatformSlug
+  const worker = async (workerIdx: number) => {
+    while (!shuttingDown) {
+      const companyId = queue.shift();
+      if (!companyId) return;
+      const label = `${platformSlug} company=${companyId} script=${scriptRel}`;
+      console.log(`[scheduler] executando ${label} (worker=${workerIdx}/${concurrency})`);
+      // Importante: se UMA company falhar, não deve interromper as demais.
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await runNodeScript(scriptPath, makeArgs(companyId), label);
+      } catch (err) {
+        console.error(`[scheduler] erro ao executar ${label}:`, err);
+      }
+      // Espaça um pouco para evitar rajadas (especialmente em produção)
       // eslint-disable-next-line no-await-in-loop
-      await runNodeScript(scriptPath, makeArgs(companyId), label);
-    } catch (err) {
-      console.error(`[scheduler] erro ao executar ${label}:`, err);
+      await sleep(250);
     }
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(250);
-  }
+  };
+
+  const workerCount = Math.min(concurrency, ids.length);
+  await Promise.all(Array.from({ length: workerCount }, (_, i) => worker(i + 1)));
 }
 
 async function main() {

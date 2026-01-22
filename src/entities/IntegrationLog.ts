@@ -3,6 +3,7 @@ import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
 
 export type IntegrationCommand = "Pedidos" | "Cotações" | "Produtos";
+export type IntegrationStatus = "PROCESSANDO" | "FINALIZADO" | "ERRO";
 
 @Entity({ name: "logs" })
 export class IntegrationLog {
@@ -15,6 +16,9 @@ export class IntegrationLog {
   // Data usada nos filtros do processamento (quando aplicável; ex.: start-date)
   @Column({ type: "date", nullable: true })
   date?: Date | null;
+
+  @Column({ type: "varchar", nullable: true })
+  status?: IntegrationStatus | null;
 
   @Column({ type: "varchar" })
   command!: IntegrationCommand;

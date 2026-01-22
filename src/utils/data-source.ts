@@ -24,6 +24,16 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || '',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_DATABASE || '',
+  // Timeouts/keepalive para reduzir erros transitórios em conexões longas.
+  // - connectionTimeoutMillis: timeout para conectar no DB
+  // - query_timeout: timeout no client (pg) aguardando resposta
+  // - statement_timeout: timeout no server (Postgres) por query
+  extra: {
+    keepAlive: true,
+    connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 30_000),
+    query_timeout: Number(process.env.DB_QUERY_TIMEOUT_MS ?? 300_000), // 5 min
+    options: `-c statement_timeout=${Number(process.env.DB_STATEMENT_TIMEOUT_MS ?? 300_000)}`, // 5 min
+  },
   // IMPORTANTE:
   // Em produção, NUNCA use synchronize em banco com dados/tabelas existentes:
   // isso pode gerar ALTER/DROP indesejado e/ou corrida entre processos (ADD COLUMN "já existe").

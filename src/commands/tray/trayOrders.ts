@@ -1,6 +1,7 @@
 import "dotenv/config";
 import "reflect-metadata";
 
+import { In } from "typeorm";
 import { AppDataSource } from "../../utils/data-source.js";
 import { Company } from "../../entities/Company.js";
 import { Plataform } from "../../entities/Plataform.js";
@@ -23,6 +24,51 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isPgTransientNetworkError(err: unknown): boolean {
+  const e = err as any;
+  const code = e?.code ?? e?.driverError?.code;
+  // node-postgres expõe erros de rede como códigos tipo ETIMEDOUT/ECONNRESET
+  const msg = String(e?.message ?? e?.driverError?.message ?? "");
+  return (
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    code === "EPIPE" ||
+    // alguns encerramentos vêm só como message (sem code)
+    /Connection terminated unexpectedly/i.test(msg) ||
+    /terminating connection/i.test(msg) ||
+    /server closed the connection unexpectedly/i.test(msg) ||
+    // postgres restart / crash / admin shutdown
+    code === "57P01" ||
+    code === "57P02" ||
+    code === "57P03"
+  );
+}
+
+async function withRetry<T>(label: string, fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isPgTransientNetworkError(err) || attempt === maxRetries) throw err;
+      const delay = Math.min(60_000, 2_000 * 2 ** (attempt - 1)); // 2s, 4s, 8s... cap 60s
+      console.warn(`[tray:orders] ${label}: erro transitório (${(err as any)?.code ?? (err as any)?.driverError?.code}); retry ${attempt}/${maxRetries} em ${delay}ms`);
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) return [arr];
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 function renderProgress(line: string) {
   if (IS_TTY) {
     const padded = line.length < 120 ? line.padEnd(120, " ") : line;
@@ -32,10 +78,14 @@ function renderProgress(line: string) {
   }
 }
 
-function parseArgs(argv: string[]): { company?: number; startDate?: string; endDate?: string } {
+function parseArgs(argv: string[]): { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean } {
   const raw = new Map<string, string>();
   for (const a of argv) {
     if (!a.startsWith("--")) continue;
+    if (a === "--onlyInsert" || a === "--only-insert") {
+      raw.set("onlyInsert", "true");
+      continue;
+    }
     const parts = a.slice(2).split("=");
     const k = parts[0];
     if (!k) continue;
@@ -45,11 +95,13 @@ function parseArgs(argv: string[]): { company?: number; startDate?: string; endD
   const companyStr = raw.get("company");
   const startDate = raw.get("start-date");
   const endDate = raw.get("end-date");
+  const onlyInsert = raw.get("onlyInsert") === "true";
 
-  const result: { company?: number; startDate?: string; endDate?: string } = {};
+  const result: { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean } = {};
   if (companyStr) result.company = Number(companyStr);
   if (startDate) result.startDate = startDate;
   if (endDate) result.endDate = endDate;
+  if (onlyInsert) result.onlyInsert = true;
   return result;
 }
 
@@ -197,7 +249,18 @@ function isTrayTokenError(payload: unknown): boolean {
   if (!obj) return false;
   // A Tray pode retornar diferentes error_code para token inválido/expirado
   // Ex.: 1000 (token expired) e 1099 ("Token inválido ou expirado")
-  return obj.code === 401 && (obj.error_code === 1000 || obj.error_code === 1099);
+  const causes = Array.isArray(obj.causes) ? obj.causes.map((c) => String(c)) : [];
+  return (
+    obj.code === 401 &&
+    (obj.error_code === 1000 ||
+      obj.error_code === 1099 ||
+      causes.some((c) => /token\s+inv/i.test(c) || /expir/i.test(c) || /unauthorized/i.test(c)))
+  );
+}
+
+function isTrayTokenErrorText(text: string): boolean {
+  // Às vezes o JSON não é parseado e sobra só o texto. Também pode vir com escapes (\u00e1 etc).
+  return /token\s+inv/i.test(text) || /expir/i.test(text) || /unauthorized\s+access/i.test(text);
 }
 
 type TrayAuthContext = {
@@ -241,9 +304,8 @@ async function trayGetJson(
   pathWithQuery: string,
   reauth: () => Promise<void>,
 ): Promise<{ json: unknown; text: string }> {
-  const url = `${ctx.baseUrl}${pathWithQuery}${pathWithQuery.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(
-    ctx.accessToken,
-  )}`;
+  const buildUrl = () =>
+    `${ctx.baseUrl}${pathWithQuery}${pathWithQuery.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(ctx.accessToken)}`;
 
   const MAX_RETRIES_504 = 5;
   const RETRY_DELAY_MS_504 = 60_000; // 1 minute
@@ -252,7 +314,7 @@ async function trayGetJson(
 
   for (let attempt = 1; attempt <= MAX_RETRIES_504; attempt += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const result = await httpGetJson(url);
+    const result = await httpGetJson(buildUrl());
     status = result.status;
     json = result.json;
     text = result.text;
@@ -268,17 +330,22 @@ async function trayGetJson(
       }
     }
 
-    // Token expired: reauth once, then retry immediately (still subject to 504 retry loop in next iteration)
-    if (status === 401 && isTrayTokenError(json)) {
+    // Token expired: reauth once, then retry immediately
+    if (status === 401 && (isTrayTokenError(json) || isTrayTokenErrorText(text))) {
       // eslint-disable-next-line no-await-in-loop
       await reauth();
       // eslint-disable-next-line no-await-in-loop
-      const retry = await httpGetJson(
-        `${ctx.baseUrl}${pathWithQuery}${pathWithQuery.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(ctx.accessToken)}`,
-      );
+      const retry = await httpGetJson(buildUrl());
       status = retry.status;
       json = retry.json;
       text = retry.text;
+      // se após reauth cair em 504, respeita o loop de retry
+      if (status === 504 && attempt < MAX_RETRIES_504) {
+        console.warn(`[tray:orders] HTTP 504 on ${pathWithQuery} after reauth (retry ${attempt}/${MAX_RETRIES_504} in 60s)`);
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(RETRY_DELAY_MS_504);
+        continue;
+      }
     }
 
     break;
@@ -381,6 +448,7 @@ async function main() {
   const y = yesterdayUtc();
   const startDate = partial.startDate ?? y;
   const endDate = partial.endDate ?? partial.startDate ?? y;
+  const onlyInsert = Boolean(partial.onlyInsert);
   // valida formato e range
   let start = parseIsoDate(startDate);
   let end = parseIsoDate(endDate);
@@ -396,6 +464,7 @@ async function main() {
   let platformRefForLog: Plataform | null = null;
   let processedOrdersForLog = 0;
   let createdCustomersForLog = 0;
+  let integrationLogId: number | null = null;
 
   try {
     const companyRepo = AppDataSource.getRepository(Company);
@@ -420,6 +489,34 @@ async function main() {
       relations: { company: true, platform: true },
     });
     if (!companyPlatform) throw new Error('Platform "tray" não está instalada nessa company.');
+
+    // cria log "Processando..." imediatamente (para aparecer na tela)
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      const started = await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: ymdToDate(formatDate(start)),
+          company: companyRef,
+          platform,
+          command: "Pedidos",
+          status: "PROCESSANDO",
+          log: {
+            company: companyIdNum,
+            platform: { id: platform.id, slug: "tray" },
+            command: "Pedidos",
+            startDate: formatDate(start),
+            endDate: formatDate(end),
+            onlyInsert,
+            status: "PROCESSANDO",
+          },
+          errors: null,
+        }),
+      );
+      integrationLogId = started.id;
+    } catch (e) {
+      console.warn("[tray:orders] falha ao gravar log inicial (PROCESSANDO):", e);
+    }
 
     const cfg = (companyPlatform.config ?? {}) as Record<string, unknown>;
     const baseUrl = typeof cfg.url === "string" ? cfg.url.replace(/\/+$/, "") : null;
@@ -568,20 +665,80 @@ async function main() {
         const ordersArr = ensureArray(root.Orders);
         if (ordersArr.length === 0) break;
 
+        const pageOrders: Array<{ id: number; orderObj: Record<string, unknown>; trayCustomerId: string | null }> = [];
+        const orderCodes: number[] = [];
+        const customerExternalIds = new Set<string>();
+
         for (const wrapper of ordersArr) {
           const w = asRecord(wrapper);
           const orderObj = w ? asRecord(w.Order) : null;
           if (!orderObj) continue;
-
           const id = pickNumber(orderObj, "id");
           if (!id) continue;
+          const trayCustomerId = pickString(orderObj, "customer_id");
+          pageOrders.push({ id, orderObj, trayCustomerId });
+          orderCodes.push(id);
+          if (trayCustomerId) customerExternalIds.add(trayCustomerId);
+        }
+
+        // Prefetch do banco (por página): elimina N+1 (findOne por order/customer)
+        const existingOrdersArr = orderCodes.length
+          ? await withRetry(
+              "db find existing orders (page)",
+              () =>
+                orderRepo.find({
+                  where: { company: { id: companyEntity.id }, orderCode: In(orderCodes) },
+                }),
+              3,
+            )
+          : [];
+        const existingOrdersByCode = new Map<number, Order>();
+        for (const o of existingOrdersArr) existingOrdersByCode.set(o.orderCode, o);
+
+        const customerExternalIdArr = Array.from(customerExternalIds);
+        const existingCustomersArr = customerExternalIdArr.length
+          ? await withRetry(
+              "db find existing customers (page)",
+              () =>
+                customerRepo.find({
+                  where: { company: { id: companyEntity.id }, externalId: In(customerExternalIdArr) },
+                }),
+              3,
+            )
+          : [];
+        const existingCustomersByExternalId = new Map<string, Customer>();
+        for (const c of existingCustomersArr) {
+          if (!c.externalId) continue;
+          existingCustomersByExternalId.set(c.externalId, c);
+          customerCache.set(c.externalId, c);
+        }
+
+        const ordersToUpdate: Order[] = [];
+        const ordersToInsert: Order[] = [];
+        const orderObjByCode = new Map<number, Record<string, unknown>>();
+
+        for (const { id, orderObj, trayCustomerId } of pageOrders) {
+          let order = existingOrdersByCode.get(id) ?? null;
+          const orderExists = Boolean(order);
+          if (!order) order = orderRepo.create({ orderCode: id });
+          if (!orderExists) orderObjByCode.set(id, orderObj);
+
+          // --onlyInsert: ignora totalmente updates; só insere pedidos inexistentes no banco.
+          if (onlyInsert && orderExists) {
+            processedOrders += 1;
+            dayProcessed += 1;
+            currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
+            updateProgress(processedOrders % 10 === 0);
+            continue;
+          }
 
           // Customer: a lista só traz customer_id, sem CPF/CNPJ.
           // Vamos criar/usar um "taxId" sintético para manter relacionamento, e sinalizar que campos reais não foram preenchidos.
-          const trayCustomerId = pickString(orderObj, "customer_id");
           let customer: Customer | null = null;
           let customerObjForOrder: Record<string, unknown> | null = null;
-          if (trayCustomerId) {
+          // Otimização: se o pedido já existe, não fazemos requests individuais de customer.
+          // O objetivo aqui é atualizar rápido o básico (principalmente status) com o que já vem na listagem.
+          if (!orderExists && trayCustomerId) {
             const cached = customerCache.get(trayCustomerId);
             if (cached) {
               customer = cached;
@@ -589,7 +746,19 @@ async function main() {
             } else {
               currentAction = `buscando customer ${trayCustomerId}`;
               updateProgress(true);
-              const { json: customerJson } = await trayGetJson(ctx, `/customers/${encodeURIComponent(trayCustomerId)}`, reauth);
+              let customerJson: unknown = null;
+              try {
+                ({ json: customerJson } = await trayGetJson(ctx, `/customers/${encodeURIComponent(trayCustomerId)}`, reauth));
+              } catch (err) {
+                // Não derruba o job por falha pontual de customer (401 persistente, customer não encontrado, etc.)
+                console.error(
+                  `[tray:orders] falha ao buscar customer ${trayCustomerId}; seguindo sem customer. order_id=${id}`,
+                  err,
+                );
+                customerObjForOrder = null;
+                customer = null;
+                continue;
+              }
               const customerRoot = asRecord(customerJson) ?? {};
               const customerObj = asRecord(customerRoot.Customer);
               if (customerObj) {
@@ -600,13 +769,14 @@ async function main() {
                 const taxId =
                   taxIdRaw && normalizeCpfCnpj(taxIdRaw) ? normalizeCpfCnpj(taxIdRaw) : `tray_customer:${trayCustomerId}`;
 
-                customer =
-                  (await customerRepo.findOne({ where: { company: { id: companyEntity.id }, externalId: trayCustomerId } })) ??
-                  customerRepo.create({
+                customer = existingCustomersByExternalId.get(trayCustomerId) ?? customerCache.get(trayCustomerId) ?? null;
+                if (!customer) {
+                  customer = customerRepo.create({
                     company: companyEntity,
                     externalId: trayCustomerId,
                     taxId,
                   });
+                }
                 customer.company = companyEntity;
                 customer.externalId = trayCustomerId;
                 customer.taxId = taxId;
@@ -625,16 +795,61 @@ async function main() {
                 };
 
                 customer.raw = customerJson ?? null;
-                customer = await customerRepo.save(customer);
-                customerCache.set(trayCustomerId, customer);
+                try {
+                  customer = await customerRepo.save(customer);
+                } catch (err: any) {
+                  // Mesma corrida do orders: pode existir concorrência e o INSERT bater no UNIQUE.
+                  const code = err?.driverError?.code ?? err?.code;
+                  const constraint = err?.driverError?.constraint ?? err?.constraint;
+                  if (code === "23505" && constraint === "UQ_customers_company_id_external_id") {
+                    console.warn(
+                      `[tray:orders] customer duplicado (unique); tentando atualizar existente. company_id=${companyEntity.id} external_id=${trayCustomerId}`,
+                    );
+                    const existing = await withRetry(
+                      `db findOne customer after unique external_id=${trayCustomerId}`,
+                      () =>
+                        customerRepo.findOne({
+                          where: { company: { id: companyEntity.id }, externalId: trayCustomerId },
+                        }),
+                      3,
+                    );
+                    if (!existing) {
+                      console.warn(
+                        `[tray:orders] violação de unique em customer, mas não encontrei o registro existente; seguindo sem customer. company_id=${companyEntity.id} external_id=${trayCustomerId}`,
+                      );
+                      customer = null;
+                      customerObjForOrder = null;
+                    } else {
+                      customerRepo.merge(existing, customer);
+                      try {
+                        customer = await customerRepo.save(existing);
+                      } catch (err2) {
+                        console.error(
+                          `[tray:orders] falha ao re-salvar customer após unique; seguindo sem customer. company_id=${companyEntity.id} external_id=${trayCustomerId}`,
+                          err2,
+                        );
+                        customer = null;
+                        customerObjForOrder = null;
+                      }
+                    }
+                  } else {
+                    console.error(
+                      `[tray:orders] erro ao salvar customer; seguindo sem customer. company_id=${companyEntity.id} external_id=${trayCustomerId}`,
+                      err,
+                    );
+                    customer = null;
+                    customerObjForOrder = null;
+                  }
+                }
+                if (customer) {
+                  customerCache.set(trayCustomerId, customer);
+                  if (customer.externalId) existingCustomersByExternalId.set(customer.externalId, customer);
+                }
                 customerRawCache.set(trayCustomerId, customerJson ?? null);
                 if (!cached) createdCustomers += 1;
               }
             }
           }
-
-          let order = await orderRepo.findOne({ where: { company: { id: companyEntity.id }, orderCode: id } });
-          if (!order) order = orderRepo.create({ orderCode: id });
 
           // de/para principais
           const trayStatusRaw = pickString(orderObj, "status");
@@ -649,6 +864,18 @@ async function main() {
             throw e;
           }
           order.currentStatusCode = pickString(asRecord(orderObj.OrderStatus) ?? {}, "id");
+
+          // Fast path: pedido já existe → atualiza somente o básico (status vindo da listagem),
+          // sem requests individuais e sem regravar jsonb/raw.
+          if (orderExists) {
+            ordersToUpdate.push(order);
+            processedOrders += 1;
+            dayProcessed += 1;
+            currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
+            updateProgress(processedOrders % 10 === 0);
+            continue;
+          }
+
           const ymd = normalizeDateString(pickString(orderObj, "date"));
           // 1) Preferência: hora de criação do pedido vindo do marketplace (MarketplaceOrder[0].created)
           let createdSql: string | null = null;
@@ -665,7 +892,8 @@ async function main() {
             if (hourFromList) orderDate = parseDateTimeFromYmdHms(ymd, hourFromList);
           }
           // 3) Fallback: buscar detalhe do pedido para tentar pegar "hour"
-          if (!orderDate) {
+          // Otimização: se o pedido já existe, não buscamos detalhe (request individual).
+          if (!orderDate && !orderExists) {
             const cached = orderDetailCache.get(id);
             let dateFromDetail: string | null = cached?.date ?? null;
             let hourFromDetail: string | null = cached?.hour ?? null;
@@ -701,7 +929,12 @@ async function main() {
               parseDateTimeFromSql(pickString(orderObj, "modified"));
           }
 
-          order.orderDate = orderDate;
+          // Para pedidos já existentes, preserva orderDate anterior se não conseguimos inferir pela listagem.
+          if (orderDate) {
+            order.orderDate = orderDate;
+          } else if (!orderExists) {
+            order.orderDate = null;
+          }
           order.deliveryDate =
             normalizeDateString(pickString(orderObj, "estimated_delivery_date")) ??
             normalizeDateString(pickString(orderObj, "shipment_date"));
@@ -772,12 +1005,142 @@ async function main() {
 
           // sinaliza campos que não conseguimos preencher a partir da Tray
           markMissingIfNull(stats, "orders.delivery_days", order.deliveryDays);
+          ordersToInsert.push(order);
 
-          order = await orderRepo.save(order);
+          processedOrders += 1;
+          dayProcessed += 1;
+          currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
+          updateProgress(processedOrders % 10 === 0);
+        }
 
-          // items: a listagem só traz ProductsSold (ids). Vamos persistir como "sku" (quando possível).
-          await itemRepo.delete({ order: { id: order.id } as Order });
+        // Persiste em lote (por página) para reduzir roundtrips no banco.
+        if (ordersToUpdate.length > 0) {
+          // Evita TypeORM save() para updates simples (status), pois ele faz SELECTs internos e aumenta latência/locks.
+          // Fazemos UPDATE em lote via SQL: UPDATE orders SET ... FROM (VALUES ...) v WHERE company_id=? AND order_code=v.order_code
+          const updates = ordersToUpdate
+            .map((o) => ({
+              orderCode: o.orderCode,
+              currentStatus: (o.currentStatus ?? null) as string | null,
+              currentStatusCode: (o.currentStatusCode ?? null) as string | null,
+            }))
+            .filter((u) => Number.isInteger(u.orderCode) && u.orderCode > 0);
+
+          for (const batch of chunkArray(updates, 10)) {
+            if (batch.length === 0) continue;
+            const valuesSql = batch
+              .map((_, idx) => {
+                const base = 2 + idx * 3;
+                return `($${base}::int, $${base + 1}::text, $${base + 2}::text)`;
+              })
+              .join(", ");
+            const sql = `
+              UPDATE orders o
+              SET
+                current_status = v.current_status,
+                current_status_code = v.current_status_code
+              FROM (VALUES ${valuesSql}) AS v(order_code, current_status, current_status_code)
+              WHERE o.company_id = $1 AND o.order_code = v.order_code
+            `;
+            const params: any[] = [companyEntity.id];
+            for (const u of batch) params.push(u.orderCode, u.currentStatus, u.currentStatusCode);
+
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              await withRetry(
+                `db batch update orders status (n=${batch.length})`,
+                () => AppDataSource.query(sql, params),
+                3,
+              );
+            } catch (err) {
+              console.error("[tray:orders] falha no batch update de status; fallback por pedido:", err);
+              for (const u of batch) {
+                try {
+                  // eslint-disable-next-line no-await-in-loop
+                  await withRetry(
+                    `db update order status order_code=${u.orderCode}`,
+                    () =>
+                      AppDataSource.query(
+                        `UPDATE orders SET current_status = $1, current_status_code = $2 WHERE company_id = $3 AND order_code = $4`,
+                        [u.currentStatus, u.currentStatusCode, companyEntity.id, u.orderCode],
+                      ),
+                    3,
+                  );
+                } catch (err2) {
+                  console.error(
+                    `[tray:orders] falha ao atualizar status; pulando. company_id=${companyEntity.id} order_code=${u.orderCode}`,
+                    err2,
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        let insertedOrders: Order[] = [];
+        let insertedOrdersForItems: Order[] = [];
+        if (ordersToInsert.length > 0) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            insertedOrders = await withRetry("save orders batch(insert)", () => orderRepo.save(ordersToInsert, { chunk: 10 }), 3);
+            insertedOrdersForItems = insertedOrders;
+          } catch (err) {
+            console.error("[tray:orders] falha ao salvar lote de inserts; fallback por pedido:", err);
+            for (const o of ordersToInsert) {
+              try {
+                // eslint-disable-next-line no-await-in-loop
+                const saved = await withRetry(`save order(insert) order_code=${o.orderCode}`, () => orderRepo.save(o), 3);
+                insertedOrders.push(saved);
+                insertedOrdersForItems.push(saved);
+              } catch (err2: any) {
+                // concorrência: pode cair em unique no insert
+                const code = err2?.driverError?.code ?? err2?.code;
+                const constraint = err2?.driverError?.constraint ?? err2?.constraint;
+                if (code === "23505" && constraint === "UQ_orders_company_id_order_code") {
+                  console.warn(
+                    `[tray:orders] duplicado (unique) ao inserir pedido; tentando atualizar existente. company_id=${companyEntity.id} order_code=${o.orderCode}`,
+                  );
+                  // eslint-disable-next-line no-await-in-loop
+                  const existing = await withRetry(
+                    `db findOne order after unique order_code=${o.orderCode}`,
+                    () =>
+                      orderRepo.findOne({
+                        where: { company: { id: companyEntity.id }, orderCode: o.orderCode },
+                      }),
+                    3,
+                  );
+                  if (!existing) {
+                    console.warn(
+                      `[tray:orders] violação de unique, mas não encontrei o registro existente; pulando. company_id=${companyEntity.id} order_code=${o.orderCode}`,
+                    );
+                    continue;
+                  }
+                  orderRepo.merge(existing, o);
+                  try {
+                    // eslint-disable-next-line no-await-in-loop
+                    await orderRepo.save(existing, { reload: false });
+                  } catch (err3) {
+                    console.error(
+                      `[tray:orders] falha ao atualizar após unique; pulando. company_id=${companyEntity.id} order_code=${o.orderCode}`,
+                      err3,
+                    );
+                  }
+                  continue;
+                }
+                console.error(
+                  `[tray:orders] erro ao inserir pedido; pulando. company_id=${companyEntity.id} order_code=${o.orderCode}`,
+                  err2,
+                );
+              }
+            }
+          }
+        }
+
+        // Itens/produtos: somente para pedidos inseridos nesta página.
+        for (const savedOrder of insertedOrdersForItems) {
+          const orderObj = orderObjByCode.get(savedOrder.orderCode);
+          if (!orderObj) continue;
           const productsSold = ensureArray(orderObj.ProductsSold);
+          const itemsToSave: OrderItem[] = [];
           for (const p of productsSold) {
             const pObj = asRecord(p);
             if (!pObj) continue;
@@ -786,8 +1149,9 @@ async function main() {
 
             let psRaw = productSoldCache.get(psIdStr);
             if (!psRaw) {
-              currentAction = `buscando item ${psIdStr} (order ${id})`;
+              currentAction = `buscando item ${psIdStr} (order ${savedOrder.orderCode})`;
               updateProgress(true);
+              // eslint-disable-next-line no-await-in-loop
               const { json: psJson } = await trayGetJson(ctx, `/products_solds/${encodeURIComponent(psIdStr)}`, reauth);
               psRaw = psJson ?? null;
               productSoldCache.set(psIdStr, psRaw);
@@ -801,11 +1165,12 @@ async function main() {
             const price = pickString(detail, "price");
             if (!productId) continue;
 
+            // eslint-disable-next-line no-await-in-loop
             const product = await ensureProductBySku(productId, detail, psRaw);
 
             const item = itemRepo.create({
               company: companyEntity,
-              order,
+              order: savedOrder,
               product,
               sku: productId,
               unitPrice: price,
@@ -819,13 +1184,17 @@ async function main() {
             markMissingIfNull(stats, "order_items.quantity", item.quantity);
             markMissingIfNull(stats, "order_items.unit_price", item.unitPrice);
 
-            await itemRepo.save(item);
+            itemsToSave.push(item);
           }
-
-          processedOrders += 1;
-          dayProcessed += 1;
-          currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
-          updateProgress(processedOrders % 10 === 0);
+          if (itemsToSave.length > 0) {
+            // batch pequeno + retry para evitar estourar conexão quando o DB oscila
+            // eslint-disable-next-line no-await-in-loop
+            await withRetry(
+              `save order_items batch order_code=${savedOrder.orderCode} items=${itemsToSave.length}`,
+              () => itemRepo.save(itemsToSave, { chunk: 10 }),
+              3,
+            );
+          }
         }
 
         // próxima página
@@ -861,55 +1230,105 @@ async function main() {
     processedOrdersForLog = processedOrders;
     createdCustomersForLog = createdCustomers;
 
+    // finaliza o mesmo registro
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: ymdToDate(formatDate(start)),
-          company: companyRef,
-          platform,
-          command: "Pedidos",
-          log: {
-            company: companyIdNum,
-            platform: { id: platform.id, slug: "tray" },
-            command: "Pedidos",
-            startDate: formatDate(start),
-            endDate: formatDate(end),
-            orders_processed: processedOrdersForLog,
-            customers_created: createdCustomersForLog,
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "FINALIZADO",
+            log: {
+              company: companyIdNum,
+              platform: { id: platform.id, slug: "tray" },
+              command: "Pedidos",
+              startDate: formatDate(start),
+              endDate: formatDate(end),
+              onlyInsert,
+              status: "FINALIZADO",
+              orders_processed: processedOrdersForLog,
+              customers_created: createdCustomersForLog,
+            },
+            errors: null as any,
           },
-          errors: null,
-        }),
-      );
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: ymdToDate(formatDate(start)),
+            company: companyRef,
+            platform,
+            command: "Pedidos",
+            status: "FINALIZADO",
+            log: {
+              company: companyIdNum,
+              platform: { id: platform.id, slug: "tray" },
+              command: "Pedidos",
+              startDate: formatDate(start),
+              endDate: formatDate(end),
+              onlyInsert,
+              status: "FINALIZADO",
+              orders_processed: processedOrdersForLog,
+              customers_created: createdCustomersForLog,
+            },
+            errors: null,
+          }),
+        );
+      }
     } catch (e) {
-      console.warn("[tray:orders] falha ao gravar log de integração:", e);
+      console.warn("[tray:orders] falha ao finalizar log de integração:", e);
     }
   } catch (err) {
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: ymdToDate(formatDate(start)),
-          company: companyRefForLog ?? ({ id: companyIdNum } as any),
-          platform: platformRefForLog ?? null,
-          command: "Pedidos",
-          log: {
-            company: companyIdNum,
-            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
-            command: "Pedidos",
-            startDate: formatDate(start),
-            endDate: formatDate(end),
-            orders_processed: processedOrdersForLog,
-            customers_created: createdCustomersForLog,
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "ERRO",
+            log: {
+              company: companyIdNum,
+              platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
+              command: "Pedidos",
+              startDate: formatDate(start),
+              endDate: formatDate(end),
+              onlyInsert,
+              status: "ERRO",
+              orders_processed: processedOrdersForLog,
+              customers_created: createdCustomersForLog,
+            },
+            errors: errorPayload as any,
           },
-          errors:
-            err instanceof Error
-              ? { name: err.name, message: err.message, stack: err.stack ?? null }
-              : { message: String(err) },
-        }),
-      );
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: ymdToDate(formatDate(start)),
+            company: companyRefForLog ?? ({ id: companyIdNum } as any),
+            platform: platformRefForLog ?? null,
+            command: "Pedidos",
+            status: "ERRO",
+            log: {
+              company: companyIdNum,
+              platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
+              command: "Pedidos",
+              startDate: formatDate(start),
+              endDate: formatDate(end),
+              onlyInsert,
+              status: "ERRO",
+              orders_processed: processedOrdersForLog,
+              customers_created: createdCustomersForLog,
+            },
+            errors: errorPayload,
+          }),
+        );
+      }
     } catch (e) {
       console.warn("[tray:orders] falha ao gravar log de erro:", e);
     }

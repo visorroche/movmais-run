@@ -149,6 +149,7 @@ async function main() {
   let pagesFetchedForLog = 0;
   let totalApiForLog = 0;
   let uniqueQuoteIdForLog = 0;
+  let integrationLogId: number | null = null;
 
   try {
     const companyRepo = AppDataSource.getRepository(Company);
@@ -182,6 +183,30 @@ async function main() {
     const tokenRaw = tokenApi ?? tokenFallback;
     const token = tokenRaw ? normalizeBearerToken(tokenRaw) : null;
     if (!token) throw new Error('Config da AllPost precisa conter "token_api" ou "token_cotacao" (Bearer).');
+
+    // log inicial (PROCESSANDO)
+    try {
+      const started = await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRef,
+          platform,
+          command: "Cotações",
+          status: "PROCESSANDO",
+          log: {
+            company: args.company,
+            platform: { id: platform.id, slug: "allpost" },
+            command: "Cotações",
+            status: "PROCESSANDO",
+          },
+          errors: null,
+        }),
+      );
+      integrationLogId = started.id;
+    } catch (e) {
+      console.warn("[allpost:quotes] falha ao gravar log inicial (PROCESSANDO):", e);
+    }
 
     const baseUrl = "https://www.allpost.com.br/api/v1/logCotacaoFila";
     const limit = 200;
@@ -417,60 +442,76 @@ async function main() {
     uniqueQuoteIdForLog = byQuoteId.size;
 
     try {
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: null,
-          company: companyRef,
-          platform,
-          command: "Cotações",
-          log: {
-            company: args.company,
-            platform: { id: platform.id, slug: "allpost" },
+      const payload = {
+        company: args.company,
+        platform: { id: platform.id, slug: "allpost" },
+        command: "Cotações",
+        status: "FINALIZADO",
+        limit,
+        pages_fetched: pagesFetchedForLog,
+        total_api: totalApiForLog,
+        unique_quote_id: uniqueQuoteIdForLog,
+        inserted: insertedForLog,
+        skipped_existing: skippedExistingForLog,
+        skipped_duplicate_on_insert: skippedDuplicateForLog,
+        invalid_rows: invalidRowsForLog,
+      };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          { processedAt: new Date(), status: "FINALIZADO", log: payload, errors: null as any },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company: companyRef,
+            platform,
             command: "Cotações",
-            limit,
-            pages_fetched: pagesFetchedForLog,
-            total_api: totalApiForLog,
-            unique_quote_id: uniqueQuoteIdForLog,
-            inserted: insertedForLog,
-            skipped_existing: skippedExistingForLog,
-            skipped_duplicate_on_insert: skippedDuplicateForLog,
-            invalid_rows: invalidRowsForLog,
-          },
-          errors: null,
-        }),
-      );
+            status: "FINALIZADO",
+            log: payload,
+            errors: null,
+          }),
+        );
+      }
     } catch (e) {
-      console.warn("[allpost:quotes] falha ao gravar log de integração:", e);
+      console.warn("[allpost:quotes] falha ao finalizar log de integração:", e);
     }
   } catch (err) {
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: null,
-          company: companyRefForLog ?? ({ id: args.company } as any),
-          platform: platformRefForLog ?? null,
-          command: "Cotações",
-          log: {
-            company: args.company,
-            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "allpost" } : null,
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      const payload = {
+        company: args.company,
+        platform: platformRefForLog ? { id: platformRefForLog.id, slug: "allpost" } : null,
+        command: "Cotações",
+        status: "ERRO",
+        inserted: insertedForLog,
+        skipped_existing: skippedExistingForLog,
+        skipped_duplicate_on_insert: skippedDuplicateForLog,
+        invalid_rows: invalidRowsForLog,
+        pages_fetched: pagesFetchedForLog,
+        total_api: totalApiForLog,
+        unique_quote_id: uniqueQuoteIdForLog,
+      };
+      if (integrationLogId) {
+        await integrationLogRepo.update({ id: integrationLogId }, { processedAt: new Date(), status: "ERRO", log: payload, errors: errorPayload as any });
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company: companyRefForLog ?? ({ id: args.company } as any),
+            platform: platformRefForLog ?? null,
             command: "Cotações",
-            inserted: insertedForLog,
-            skipped_existing: skippedExistingForLog,
-            skipped_duplicate_on_insert: skippedDuplicateForLog,
-            invalid_rows: invalidRowsForLog,
-            pages_fetched: pagesFetchedForLog,
-            total_api: totalApiForLog,
-            unique_quote_id: uniqueQuoteIdForLog,
-          },
-          errors:
-            err instanceof Error
-              ? { name: err.name, message: err.message, stack: err.stack ?? null }
-              : { message: String(err) },
-        }),
-      );
+            status: "ERRO",
+            log: payload,
+            errors: errorPayload,
+          }),
+        );
+      }
     } catch (e) {
       console.warn("[allpost:quotes] falha ao gravar log de erro:", e);
     }

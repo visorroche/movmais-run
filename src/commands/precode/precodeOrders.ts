@@ -16,6 +16,7 @@ type Args = {
   company: number;
   startDate: string;
   endDate: string;
+  onlyInsert?: boolean;
 };
 
 function ymdToDate(value: string | null): Date | null {
@@ -42,6 +43,10 @@ function parseArgs(argv: string[]): Args {
   const raw = new Map<string, string>();
   for (const a of argv) {
     if (!a.startsWith("--")) continue;
+    if (a === "--onlyInsert" || a === "--only-insert") {
+      raw.set("onlyInsert", "true");
+      continue;
+    }
     const parts = a.slice(2).split("=");
     const k = parts[0];
     if (!k) continue;
@@ -59,6 +64,7 @@ function parseArgs(argv: string[]): Args {
   const y = yesterdayUtc();
   const startDate = startDateRaw ?? y;
   const endDate = endDateRaw ?? startDate;
+  const onlyInsert = raw.get("onlyInsert") === "true";
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
     throw new Error('Parâmetro inválido: --start-date=YYYY-MM-DD.');
@@ -67,7 +73,7 @@ function parseArgs(argv: string[]): Args {
     throw new Error('Parâmetro inválido: --end-date=YYYY-MM-DD.');
   }
 
-  return { company, startDate, endDate };
+  return { company, startDate, endDate, ...(onlyInsert ? { onlyInsert: true } : {}) };
 }
 
 async function httpGetJson(url: string, token: string): Promise<unknown> {
@@ -177,6 +183,7 @@ async function main() {
   let companyRefForLog: Company | null = null;
   let platformRefForLog: Plataform | null = null;
   let processedForLog = 0;
+  let integrationLogId: number | null = null;
   try {
     const companyRepo = AppDataSource.getRepository(Company);
     const plataformRepo = AppDataSource.getRepository(Plataform);
@@ -204,6 +211,34 @@ async function main() {
     });
     if (!companyPlataform) {
       throw new Error('Plataform "precode" não está instalada nessa company (crie em company_plataforms).');
+    }
+
+    // log inicial (PROCESSANDO)
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      const started = await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: ymdToDate(args.startDate),
+          company: companyRef,
+          platform: plataform,
+          command: "Pedidos",
+          status: "PROCESSANDO",
+          log: {
+            company: args.company,
+            platform: { id: plataform.id, slug: "precode" },
+            command: "Pedidos",
+            startDate: args.startDate,
+            endDate: args.endDate,
+            onlyInsert: Boolean(args.onlyInsert),
+            status: "PROCESSANDO",
+          },
+          errors: null,
+        }),
+      );
+      integrationLogId = started.id;
+    } catch (e) {
+      console.warn("[precode:orders] falha ao gravar log inicial (PROCESSANDO):", e);
     }
 
     const cfg = (companyPlataform.config ?? {}) as Record<string, unknown>;
@@ -290,7 +325,17 @@ async function main() {
       const detail = detailPedidos[0] as Record<string, unknown> | undefined;
       if (!detail || typeof detail !== "object") continue;
 
-      // CUSTOMER
+      // ORDER
+      const codigoPedido = pickNumber(detail, "codigoPedido");
+      if (!codigoPedido) continue;
+
+      const existingOrder = await orderRepo.findOne({ where: { company: { id: companyRef.id }, orderCode: codigoPedido } });
+      if (args.onlyInsert && existingOrder) {
+        processed += 1;
+        continue;
+      }
+
+      // CUSTOMER (só quando vamos inserir/atualizar)
       const dadosCliente = (detail.dadosCliente ?? {}) as Record<string, unknown>;
       const cpfCnpj = pickString(dadosCliente, "cpfCnpj");
       let customer: Customer | null = null;
@@ -316,14 +361,7 @@ async function main() {
         customer = await customerRepo.save(customer);
       }
 
-      // ORDER
-      const codigoPedido = pickNumber(detail, "codigoPedido");
-      if (!codigoPedido) continue;
-
-      let order = await orderRepo.findOne({
-        where: { company: { id: companyRef.id }, orderCode: codigoPedido },
-        relations: { items: true },
-      });
+      let order = existingOrder;
       if (!order) {
         order = orderRepo.create({ orderCode: codigoPedido });
       }
@@ -442,56 +480,106 @@ async function main() {
       processed += 1;
     }
 
-    console.log(`[precode:orders] company=${args.company} range=${args.startDate}..${args.endDate} orders_processed=${processed}`);
+    const onlyInsertLog = args.onlyInsert ? " onlyInsert=true" : "";
+    console.log(
+      `[precode:orders] company=${args.company} range=${args.startDate}..${args.endDate} orders_processed=${processed}${onlyInsertLog}`,
+    );
     processedForLog = processed;
 
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: ymdToDate(args.startDate),
-          company: companyRef,
-          platform: plataform,
-          command: "Pedidos",
-          log: {
-            company: args.company,
-            platform: { id: plataform.id, slug: "precode" },
-            command: "Pedidos",
-            startDate: args.startDate,
-            endDate: args.endDate,
-            orders_processed: processedForLog,
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: { id: plataform.id, slug: "precode" },
+              command: "Pedidos",
+              startDate: args.startDate,
+              endDate: args.endDate,
+              onlyInsert: Boolean(args.onlyInsert),
+              status: "FINALIZADO",
+              orders_processed: processedForLog,
+            },
+            errors: null as any,
           },
-          errors: null,
-        }),
-      );
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: ymdToDate(args.startDate),
+            company: companyRef,
+            platform: plataform,
+            command: "Pedidos",
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: { id: plataform.id, slug: "precode" },
+              command: "Pedidos",
+              startDate: args.startDate,
+              endDate: args.endDate,
+              onlyInsert: Boolean(args.onlyInsert),
+              status: "FINALIZADO",
+              orders_processed: processedForLog,
+            },
+            errors: null,
+          }),
+        );
+      }
     } catch (e) {
-      console.warn("[precode:orders] falha ao gravar log de integração:", e);
+      console.warn("[precode:orders] falha ao finalizar log de integração:", e);
     }
   } catch (err) {
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: ymdToDate(args.startDate),
-          company: companyRefForLog ?? ({ id: args.company } as any),
-          platform: platformRefForLog ?? null,
-          command: "Pedidos",
-          log: {
-            company: args.company,
-            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "precode" } : null,
-            command: "Pedidos",
-            startDate: args.startDate,
-            endDate: args.endDate,
-            orders_processed: processedForLog,
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platformRefForLog ? { id: platformRefForLog.id, slug: "precode" } : null,
+              command: "Pedidos",
+              startDate: args.startDate,
+              endDate: args.endDate,
+              onlyInsert: Boolean((args as any).onlyInsert),
+              status: "ERRO",
+              orders_processed: processedForLog,
+            },
+            errors: errorPayload as any,
           },
-          errors:
-            err instanceof Error
-              ? { name: err.name, message: err.message, stack: err.stack ?? null }
-              : { message: String(err) },
-        }),
-      );
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: ymdToDate(args.startDate),
+            company: companyRefForLog ?? ({ id: args.company } as any),
+            platform: platformRefForLog ?? null,
+            command: "Pedidos",
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platformRefForLog ? { id: platformRefForLog.id, slug: "precode" } : null,
+              command: "Pedidos",
+              startDate: args.startDate,
+              endDate: args.endDate,
+              onlyInsert: Boolean((args as any).onlyInsert),
+              status: "ERRO",
+              orders_processed: processedForLog,
+            },
+            errors: errorPayload,
+          }),
+        );
+      }
     } catch (e) {
       console.warn("[precode:orders] falha ao gravar log de erro:", e);
     }

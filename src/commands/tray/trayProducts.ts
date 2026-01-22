@@ -168,6 +168,7 @@ async function main() {
   let companyRefForLog: Company | null = null;
   let platformRefForLog: Plataform | null = null;
   let upsertedForLog = 0;
+  let integrationLogId: number | null = null;
 
   try {
     const companyRepo = AppDataSource.getRepository(Company);
@@ -189,6 +190,31 @@ async function main() {
       relations: { company: true, platform: true },
     });
     if (!companyPlatform) throw new Error('Platform "tray" não está instalada nessa company.');
+
+    // log inicial (PROCESSANDO)
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      const started = await integrationLogRepo.save(
+        integrationLogRepo.create({
+          processedAt: new Date(),
+          date: null,
+          company: companyRef,
+          platform,
+          command: "Produtos",
+          status: "PROCESSANDO",
+          log: {
+            company: companyId,
+            platform: { id: platform.id, slug: "tray" },
+            command: "Produtos",
+            status: "PROCESSANDO",
+          },
+          errors: null,
+        }),
+      );
+      integrationLogId = started.id;
+    } catch (e) {
+      console.warn("[tray:products] falha ao gravar log inicial (PROCESSANDO):", e);
+    }
 
     const cfg = (companyPlatform.config ?? {}) as Record<string, unknown>;
     const baseUrl = typeof cfg.url === "string" ? cfg.url.replace(/\/+$/, "") : null;
@@ -299,47 +325,86 @@ async function main() {
 
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: null,
-          company: companyRef,
-          platform,
-          command: "Produtos",
-          log: {
-            company: companyId,
-            platform: { id: platform.id, slug: "tray" },
-            command: "Produtos",
-            upserted: upsertedForLog,
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "FINALIZADO",
+            log: {
+              company: companyId,
+              platform: { id: platform.id, slug: "tray" },
+              command: "Produtos",
+              status: "FINALIZADO",
+              upserted: upsertedForLog,
+            },
+            errors: null as any,
           },
-          errors: null,
-        }),
-      );
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company: companyRef,
+            platform,
+            command: "Produtos",
+            status: "FINALIZADO",
+            log: {
+              company: companyId,
+              platform: { id: platform.id, slug: "tray" },
+              command: "Produtos",
+              status: "FINALIZADO",
+              upserted: upsertedForLog,
+            },
+            errors: null,
+          }),
+        );
+      }
     } catch (e) {
-      console.warn("[tray:products] falha ao gravar log de integração:", e);
+      console.warn("[tray:products] falha ao finalizar log de integração:", e);
     }
   } catch (err) {
     try {
       const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
-      await integrationLogRepo.save(
-        integrationLogRepo.create({
-          processedAt: new Date(),
-          date: null,
-          company: companyRefForLog ?? ({ id: companyId } as any),
-          platform: platformRefForLog ?? null,
-          command: "Produtos",
-          log: {
-            company: companyId,
-            platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
-            command: "Produtos",
-            upserted: upsertedForLog,
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "ERRO",
+            log: {
+              company: companyId,
+              platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
+              command: "Produtos",
+              status: "ERRO",
+              upserted: upsertedForLog,
+            },
+            errors: errorPayload as any,
           },
-          errors:
-            err instanceof Error
-              ? { name: err.name, message: err.message, stack: err.stack ?? null }
-              : { message: String(err) },
-        }),
-      );
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company: companyRefForLog ?? ({ id: companyId } as any),
+            platform: platformRefForLog ?? null,
+            command: "Produtos",
+            status: "ERRO",
+            log: {
+              company: companyId,
+              platform: platformRefForLog ? { id: platformRefForLog.id, slug: "tray" } : null,
+              command: "Produtos",
+              status: "ERRO",
+              upserted: upsertedForLog,
+            },
+            errors: errorPayload,
+          }),
+        );
+      }
     } catch (e) {
       console.warn("[tray:products] falha ao gravar log de erro:", e);
     }
