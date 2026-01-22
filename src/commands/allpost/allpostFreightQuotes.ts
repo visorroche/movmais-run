@@ -191,18 +191,18 @@ async function main() {
     while (true) {
       const qs = new URLSearchParams({ limite: String(limit), page: String(page) });
       const url = `${baseUrl}?${qs.toString()}`;
-      console.log(`[allpost:freight-quotes] fetching page=${page} limit=${limit} url=${url}`);
+      console.log(`[allpost:quotes] fetching page=${page} limit=${limit} url=${url}`);
       // eslint-disable-next-line no-await-in-loop
       const payload = await httpGetJson(url, token);
       const pageRows = ensureArray(payload);
       console.log(
-        `[allpost:freight-quotes] fetched page=${page} items=${pageRows.length} accumulated=${rows.length + pageRows.length}`,
+        `[allpost:quotes] fetched page=${page} items=${pageRows.length} accumulated=${rows.length + pageRows.length}`,
       );
       if (pageRows.length === 0) break;
       rows.push(...pageRows);
       page += 1;
     }
-    console.log(`[allpost:freight-quotes] pagination finished pages_fetched=${page - 1} total_items=${rows.length}`);
+    console.log(`[allpost:quotes] pagination finished pages_fetched=${page - 1} total_items=${rows.length}`);
 
     // quoteId -> row (dedupe inside response)
     const byQuoteId = new Map<string, Record<string, unknown>>();
@@ -219,13 +219,13 @@ async function main() {
     const quoteIds = Array.from(byQuoteId.keys());
     let existingQuoteIds = new Set<string>();
     if (quoteIds.length > 0) {
-      console.log(`[allpost:freight-quotes] checking existing quotes in DB unique_quote_id=${quoteIds.length}...`);
+      console.log(`[allpost:quotes] checking existing quotes in DB unique_quote_id=${quoteIds.length}...`);
       const existing = await quoteRepo.find({
         select: { quoteId: true },
         where: { company: { id: company.id }, platform: { id: platform.id }, quoteId: In(quoteIds) },
       });
       existingQuoteIds = new Set(existing.map((e) => e.quoteId));
-      console.log(`[allpost:freight-quotes] existing in DB=${existingQuoteIds.size}`);
+      console.log(`[allpost:quotes] existing in DB=${existingQuoteIds.size}`);
     }
 
     let inserted = 0;
@@ -404,7 +404,7 @@ async function main() {
     }
 
     console.log(
-      `[allpost:freight-quotes] company=${args.company} limit=${limit} pages_fetched=${page - 1} total_api=${rows.length} unique_quote_id=${byQuoteId.size} inserted=${inserted} skipped_existing=${skippedExisting} skipped_duplicate_on_insert=${skippedDuplicateOnInsert} invalid_rows=${invalidRows}`,
+      `[allpost:quotes] company=${args.company} limit=${limit} pages_fetched=${page - 1} total_api=${rows.length} unique_quote_id=${byQuoteId.size} inserted=${inserted} skipped_existing=${skippedExisting} skipped_duplicate_on_insert=${skippedDuplicateOnInsert} invalid_rows=${invalidRows}`,
     );
 
     // snapshot p/ log
@@ -441,7 +441,7 @@ async function main() {
         }),
       );
     } catch (e) {
-      console.warn("[allpost:freight-quotes] falha ao gravar log de integração:", e);
+      console.warn("[allpost:quotes] falha ao gravar log de integração:", e);
     }
   } catch (err) {
     try {
@@ -472,7 +472,7 @@ async function main() {
         }),
       );
     } catch (e) {
-      console.warn("[allpost:freight-quotes] falha ao gravar log de erro:", e);
+      console.warn("[allpost:quotes] falha ao gravar log de erro:", e);
     }
     throw err;
   } finally {
@@ -481,7 +481,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[allpost:freight-quotes] erro:", err);
+  console.error("[allpost:quotes] erro:", err);
   process.exit(1);
 });
 

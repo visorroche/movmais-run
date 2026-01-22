@@ -11,8 +11,8 @@ import { AppDataSource } from "./utils/data-source.js";
 import { CompanyPlataform } from "./entities/CompanyPlataform.js";
 
 type JobName =
-  | "allpost:freight-quotes"
-  | "allpost:freight-orders"
+  | "allpost:quotes"
+  | "allpost:orders"
   | "precode:products"
   | "tray:products"
   | "precode:orders"
@@ -231,13 +231,13 @@ async function main() {
 
   // job: allpost freight quotes (a cada 5 min)
   const tickAllpost = () =>
-    runJob("allpost:freight-quotes", async () => {
+    runJob("allpost:quotes", async () => {
       await runForCompanies("allpost", "commands/allpost/allpostFreightQuotes.js", (companyId) => [`--company=${companyId}`]);
     });
 
   // job: allpost freight orders (a cada 1h) — roda um range sobreposto (últimos 2 dias UTC) para capturar atualizações
   const tickAllpostFreightOrders = () =>
-    runJob("allpost:freight-orders", async () => {
+    runJob("allpost:orders", async () => {
       const start = addDaysUtc(utcMidnight(new Date()), -2);
       const end = new Date();
       await runForCompanies("allpost", "commands/allpost/allpostFreightOrders.js", (companyId) => [
