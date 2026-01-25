@@ -12,11 +12,17 @@ jobs:
     steps:
       - name: "📍 Conectar ao servidor"
         uses: appleboy/ssh-action@master
+        env:
+          ENV: ${{ secrets.ENV }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.DEPLOY_KEY }}
+          script_stop: true
+          envs: ENV
           script: |
+            set -e
+
             echo "=========================================="
             echo "🚀 INICIANDO DEPLOY DO RUN"
             echo "=========================================="
@@ -28,21 +34,21 @@ jobs:
 
             echo "📍 Verificar diretório"
             pwd
-            ls -la /opt/movmais/apps/
+            ls -la /opt/movmais/apps/ || true
             echo ""
 
             echo "📍 Versão atual no servidor (ANTES do deploy)"
             cd /opt/movmais/apps/run
             echo "Commit atual:"
-            git log -1 --oneline
+            git log -1 --oneline || true
             echo "Branch:"
-            git branch
+            git branch --show-current 2>/dev/null || git branch || true
             echo ""
 
             echo "📍 Atualizar código do GitHub"
             git fetch origin
             echo "Commits disponíveis:"
-            git log -3 --oneline
+            git log -3 --oneline || true
             echo ""
 
             echo "📍 Fazer reset hard para origin/main"
@@ -51,30 +57,34 @@ jobs:
             echo ""
 
             echo "📍 Versão APÓS git reset"
-            git log -1 --oneline
+            git log -1 --oneline || true
             echo ""
 
             echo "📍 Verificar arquivos alterados"
-            git status
+            git status || true
             echo ""
 
             echo "📍 Verificar conteúdo de arquivo importante (package.json)"
-            head -5 package.json
+            head -5 package.json || true
             echo ""
 
             echo "=========================================="
-            echo "📝 CRIAR ARQUIVO .ENV COM SECRETS"
+            echo "📝 CRIAR ARQUIVO .ENV (VINDO DO GITHUB SECRET)"
             echo "=========================================="
-            cat > /opt/movmais/apps/run/.env << 'ENVEOF'
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_PORT=${{ secrets.DB_PORT }}
-            DB_DATABASE=${{ secrets.DB_DATABASE }}
-            DB_USERNAME=${{ secrets.DB_USERNAME }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            PORT=${{ secrets.PORT }}
-            NODE_ENV=production
-            ENVEOF
-            echo "✅ Arquivo .env criado com secrets do GitHub"
+            echo ""
+
+            cd /opt/movmais/apps/run
+
+            # escreve exatamente o conteúdo do secret ENV, preservando quebras de linha
+            printf '%s' "$ENV" > .env
+            echo "" >> .env
+
+            echo "✅ .env atualizado a partir de secrets.ENV"
+            echo ""
+
+            # Não vazar segredos no log (mostra só as chaves)
+            echo "📍 Chaves do .env (sem valores):"
+            awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/{print $1}' .env | sort || true
             echo ""
 
             echo "=========================================="
@@ -93,14 +103,6 @@ jobs:
 
             echo "📍 Iniciar build (sem cache)"
             docker-compose build --no-cache run
-            BUILD_STATUS=$?
-
-            if [ $BUILD_STATUS -eq 0 ]; then
-              echo "✅ BUILD SUCESSO"
-            else
-              echo "❌ BUILD FALHOU"
-              exit 1
-            fi
             echo ""
 
             echo "=========================================="
@@ -114,11 +116,11 @@ jobs:
             echo ""
 
             echo "📍 Status dos containers"
-            docker-compose ps
+            docker-compose ps || true
             echo ""
 
             echo "📍 Logs do container (últimas 30 linhas)"
-            docker logs movmais-run | tail -30
+            docker logs movmais-run | tail -30 || true
             echo ""
 
             echo "=========================================="
@@ -128,19 +130,19 @@ jobs:
             echo "📍 Verificar versão no servidor (APÓS deploy)"
             cd /opt/movmais/apps/run
             echo "Commit atual:"
-            git log -1 --oneline
+            git log -1 --oneline || true
             echo ""
 
             echo "📍 Verificar se container está rodando"
-            docker-compose ps run
+            docker-compose ps run || true
             echo ""
 
             echo "📍 Testar acesso ao Run"
-            curl -s -I http://127.0.0.1:3030/ | head -3
+            curl -s -I http://127.0.0.1:3030/ | head -3 || true
             echo ""
 
             echo "📍 Verificar porta 3030 está aberta"
-            netstat -tlnp | grep 3030 || echo "⚠️ Porta 3030 não encontrada"
+            netstat -tlnp 2>/dev/null | grep 3030 || echo "⚠️ Porta 3030 não encontrada"
             echo ""
 
             echo "=========================================="
