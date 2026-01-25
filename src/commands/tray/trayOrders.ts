@@ -141,6 +141,12 @@ function yesterdayUtc(): string {
   return formatDate(y);
 }
 
+function todayUtc(): string {
+  const now = new Date();
+  const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return formatDate(t);
+}
+
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
@@ -446,8 +452,12 @@ async function main() {
   const companyIdNum = companyId;
 
   const y = yesterdayUtc();
+  const t = todayUtc();
   const startDate = partial.startDate ?? y;
-  const endDate = partial.endDate ?? partial.startDate ?? y;
+  // Regra de default:
+  // - sem datas: ontem..hoje
+  // - com apenas --start-date: endDate = startDate
+  const endDate = partial.endDate ?? (partial.startDate ? partial.startDate : t);
   const onlyInsert = Boolean(partial.onlyInsert);
   // valida formato e range
   let start = parseIsoDate(startDate);

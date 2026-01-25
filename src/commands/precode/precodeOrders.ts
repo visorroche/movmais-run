@@ -39,6 +39,15 @@ function yesterdayUtc(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function todayUtc(): string {
+  const now = new Date();
+  const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const yyyy = t.getUTCFullYear();
+  const mm = String(t.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(t.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function parseArgs(argv: string[]): Args {
   const raw = new Map<string, string>();
   for (const a of argv) {
@@ -62,8 +71,12 @@ function parseArgs(argv: string[]): Args {
   }
 
   const y = yesterdayUtc();
+  const t = todayUtc();
   const startDate = startDateRaw ?? y;
-  const endDate = endDateRaw ?? startDate;
+  // Regra de default:
+  // - sem datas: ontem..hoje
+  // - com apenas --start-date: endDate = startDate
+  const endDate = endDateRaw ?? (startDateRaw ? startDate : t);
   const onlyInsert = raw.get("onlyInsert") === "true";
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
