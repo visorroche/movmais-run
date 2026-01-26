@@ -78,12 +78,22 @@ function renderProgress(line: string) {
   }
 }
 
-function parseArgs(argv: string[]): { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean } {
+function parseArgs(argv: string[]): {
+  company?: number;
+  startDate?: string;
+  endDate?: string;
+  onlyInsert?: boolean;
+  debugExisting?: boolean;
+} {
   const raw = new Map<string, string>();
   for (const a of argv) {
     if (!a.startsWith("--")) continue;
     if (a === "--onlyInsert" || a === "--only-insert") {
       raw.set("onlyInsert", "true");
+      continue;
+    }
+    if (a === "--debug-existing" || a === "--debugExisting") {
+      raw.set("debugExisting", "true");
       continue;
     }
     const parts = a.slice(2).split("=");
@@ -96,12 +106,20 @@ function parseArgs(argv: string[]): { company?: number; startDate?: string; endD
   const startDate = raw.get("start-date");
   const endDate = raw.get("end-date");
   const onlyInsert = raw.get("onlyInsert") === "true";
+  const debugExisting = raw.get("debugExisting") === "true";
 
-  const result: { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean } = {};
+  const result: {
+    company?: number;
+    startDate?: string;
+    endDate?: string;
+    onlyInsert?: boolean;
+    debugExisting?: boolean;
+  } = {};
   if (companyStr) result.company = Number(companyStr);
   if (startDate) result.startDate = startDate;
   if (endDate) result.endDate = endDate;
   if (onlyInsert) result.onlyInsert = true;
+  if (debugExisting) result.debugExisting = true;
   return result;
 }
 
@@ -237,17 +255,45 @@ async function httpPostJson(url: string, body: unknown): Promise<{ status: numbe
   return { status: resp.status, json, text };
 }
 
+function isTransientFetchError(err: unknown): boolean {
+  const e = err as any;
+  const code = e?.code ?? e?.cause?.code;
+  const msg = String(e?.message ?? "");
+  return (
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" ||
+    /fetch failed/i.test(msg)
+  );
+}
+
 async function httpGetJson(url: string): Promise<{ status: number; json: unknown; text: string }> {
-  const resp = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
-  const text = await resp.text().catch(() => "");
-  const json = (() => {
+  const MAX_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
     try {
-      return text ? JSON.parse(text) : null;
-    } catch {
-      return null;
+      // eslint-disable-next-line no-await-in-loop
+      const resp = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
+      // eslint-disable-next-line no-await-in-loop
+      const text = await resp.text().catch(() => "");
+      const json = (() => {
+        try {
+          return text ? JSON.parse(text) : null;
+        } catch {
+          return null;
+        }
+      })();
+      return { status: resp.status, json, text };
+    } catch (err) {
+      if (!isTransientFetchError(err) || attempt === MAX_RETRIES) throw err;
+      const delay = Math.min(60_000, 2_000 * 2 ** (attempt - 1));
+      console.warn(`[tray:orders] fetch transitório em GET; retry ${attempt}/${MAX_RETRIES} em ${delay}ms. url=${url}`);
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(delay);
     }
-  })();
-  return { status: resp.status, json, text };
+  }
+  // nunca chega aqui
+  return { status: 0, json: null, text: "" };
 }
 
 function isTrayTokenError(payload: unknown): boolean {
@@ -459,6 +505,7 @@ async function main() {
   // - com apenas --start-date: endDate = startDate
   const endDate = partial.endDate ?? (partial.startDate ? partial.startDate : t);
   const onlyInsert = Boolean(partial.onlyInsert);
+  const debugExisting = Boolean(partial.debugExisting);
   // valida formato e range
   let start = parseIsoDate(startDate);
   let end = parseIsoDate(endDate);
@@ -474,6 +521,12 @@ async function main() {
   let platformRefForLog: Plataform | null = null;
   let processedOrdersForLog = 0;
   let createdCustomersForLog = 0;
+  let insertedOrdersForLog = 0;
+  let upsertedOrdersForLog = 0;
+  let updatedOrdersForLog = 0;
+  let orderDatesBackfilledForLog = 0;
+  let failedOrdersForLog = 0;
+  let skippedOnlyInsertForLog = 0;
   let integrationLogId: number | null = null;
 
   try {
@@ -519,6 +572,11 @@ async function main() {
             endDate: formatDate(end),
             onlyInsert,
             status: "PROCESSANDO",
+            inserted: 0,
+            upserted: 0,
+            updated: 0,
+            failed: 0,
+            skipped_only_insert: 0,
           },
           errors: null,
         }),
@@ -542,6 +600,12 @@ async function main() {
     const stats = createFieldStats();
     let processedOrders = 0;
     let createdCustomers = 0;
+    let insertedOrdersCount = 0;
+    let upsertedOrdersCount = 0;
+    let updatedOrdersCount = 0;
+    let orderDatesBackfilledCount = 0;
+    let failedOrdersCount = 0;
+    let skippedOnlyInsertCount = 0;
     let totalOrdersExpected: number | null = null;
     let progressTick = 0;
     let currentAction = "iniciando";
@@ -648,28 +712,34 @@ async function main() {
       return saved;
     }
 
-    for (let day = start; day.getTime() <= end.getTime(); day = addDaysUtc(day, 1)) {
-      const dateStr = formatDate(day);
-      currentDateStr = dateStr;
-      let page = 1;
-      const limit = 50;
-      let dayTotal: number | null = null;
-      let dayProcessed = 0;
+    // Busca direta por período (BETWEEN) na Tray: mais eficiente que dia-a-dia.
+    const startYmd = formatDate(start);
+    const endYmd = formatDate(end);
+    const dateRangeParam = `${startYmd},${endYmd}`;
+    currentDateStr = `${startYmd}..${endYmd}`;
 
-      // paginação
-      while (true) {
-        progressTick += 1;
-        progressPage = page;
-        currentAction = "buscando orders";
-        updateProgress(progressTick % 3 === 0);
+    let page = 1;
+    const limit = 50;
+    let rangeTotal: number | null = null;
 
-        const { json } = await trayGetJson(ctx, `/orders?date=${encodeURIComponent(dateStr)}&page=${page}&limit=${limit}`, reauth);
+    // paginação
+    while (true) {
+      progressTick += 1;
+      progressPage = page;
+      currentAction = "buscando orders";
+      updateProgress(progressTick % 3 === 0);
+
+      const { json } = await trayGetJson(
+        ctx,
+        `/orders?date=${encodeURIComponent(dateRangeParam)}&page=${page}&limit=${limit}`,
+        reauth,
+      );
         const root = asRecord(json) ?? {};
         const paging = asRecord(root.paging) ?? {};
         const total = pickNumber(paging, "total") ?? null;
-        if (dayTotal === null && total !== null) {
-          dayTotal = total;
-          totalOrdersExpected = (totalOrdersExpected ?? 0) + total;
+        if (rangeTotal === null && total !== null) {
+          rangeTotal = total;
+          totalOrdersExpected = total;
           updateProgress(true);
         }
         const ordersArr = ensureArray(root.Orders);
@@ -724,8 +794,37 @@ async function main() {
         }
 
         const ordersToUpdate: Order[] = [];
+        const backfillOrderDates: Array<{ orderCode: number; orderDate: Date }> = [];
+        const orderCodesNeedingDetailBackfill = new Set<number>();
         const ordersToInsert: Order[] = [];
         const orderObjByCode = new Map<number, Record<string, unknown>>();
+
+        const addBackfillOrderDate = (orderCode: number, candidate: Date | null) => {
+          if (!candidate) return;
+          backfillOrderDates.push({ orderCode, orderDate: candidate });
+        };
+
+        const isMidnightUtc = (d: Date) =>
+          d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0 && d.getUTCMilliseconds() === 0;
+
+        const shouldUpdateOrderDate = (existing: Date | null | undefined, candidate: Date) => {
+          if (!existing) return true;
+          // Se a data (YYYY-MM-DD) for diferente, é quase certamente erro de preenchimento anterior.
+          if (dateToYmd(existing) !== dateToYmd(candidate)) return true;
+          // Se estava em 00:00:00 e agora temos uma hora real, atualiza.
+          if (isMidnightUtc(existing) && !isMidnightUtc(candidate)) return true;
+          return false;
+        };
+
+        const getCandidateFromList = (orderObj: Record<string, unknown>): Date | null => {
+          const ymd = normalizeDateString(pickString(orderObj, "date"));
+          const hourFromList = normalizeTimeHms(pickString(orderObj, "hour"));
+          let createdSql: string | null = null;
+          const moArr = ensureArray(orderObj.MarketplaceOrder);
+          const mo0 = moArr.length ? asRecord(moArr[0]) : null;
+          if (mo0) createdSql = pickString(mo0, "created");
+          return parseDateTimeFromSql(createdSql) ?? (hourFromList ? parseDateTimeFromYmdHms(ymd, hourFromList) : null);
+        };
 
         for (const { id, orderObj, trayCustomerId } of pageOrders) {
           let order = existingOrdersByCode.get(id) ?? null;
@@ -735,9 +834,9 @@ async function main() {
 
           // --onlyInsert: ignora totalmente updates; só insere pedidos inexistentes no banco.
           if (onlyInsert && orderExists) {
+            skippedOnlyInsertCount += 1;
             processedOrders += 1;
-            dayProcessed += 1;
-            currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
+            currentAction = rangeTotal ? `processando (${processedOrders}/${rangeTotal})` : "processando";
             updateProgress(processedOrders % 10 === 0);
             continue;
           }
@@ -878,10 +977,69 @@ async function main() {
           // Fast path: pedido já existe → atualiza somente o básico (status vindo da listagem),
           // sem requests individuais e sem regravar jsonb/raw.
           if (orderExists) {
+            if (debugExisting) {
+              const moArrDbg = ensureArray(orderObj.MarketplaceOrder);
+              const mo0Dbg = moArrDbg.length ? asRecord(moArrDbg[0]) : null;
+              const createdDbg = mo0Dbg ? pickString(mo0Dbg, "created") : null;
+              const hourDbg = pickString(orderObj, "hour");
+              const dateDbg = pickString(orderObj, "date");
+
+              let dbRow: any = null;
+              try {
+                dbRow = await withRetry(
+                  `db debug select order company_id=${companyEntity.id} order_code=${order.orderCode}`,
+                  () =>
+                    AppDataSource.query(`SELECT * FROM orders WHERE company_id = $1 AND order_code = $2 LIMIT 1`, [
+                      companyEntity.id,
+                      order.orderCode,
+                    ]),
+                  3,
+                );
+              } catch (e) {
+                dbRow = { error: String((e as any)?.message ?? e) };
+              }
+
+              console.error("\n[tray:orders][DEBUG] pedido marcado como existente (orderExists=true). Abortando.");
+              console.error("[tray:orders][DEBUG] chave:", {
+                company_id: companyEntity.id,
+                order_code: order.orderCode,
+              });
+              console.error("[tray:orders][DEBUG] DB entity (parcial):", {
+                id: (order as any)?.id ?? null,
+                order_code: order.orderCode,
+                order_date: (order as any)?.orderDate ?? null,
+                created_at: (order as any)?.createdAt ?? null,
+                updated_at: (order as any)?.updatedAt ?? null,
+                current_status: (order as any)?.currentStatus ?? null,
+                current_status_code: (order as any)?.currentStatusCode ?? null,
+              });
+              console.error("[tray:orders][DEBUG] DB row (SELECT *):", Array.isArray(dbRow) ? dbRow[0] ?? null : dbRow);
+              console.error("[tray:orders][DEBUG] Tray list (parcial):", {
+                id,
+                date: dateDbg,
+                hour: hourDbg,
+                marketplace_created: createdDbg,
+                status: pickString(orderObj, "status"),
+                external_code: pickString(orderObj, "external_code"),
+              });
+              throw new Error(
+                `[DEBUG] orderExists=true para company_id=${companyEntity.id} order_code=${order.orderCode} (ver output acima)`,
+              );
+            }
+
+            // Correção de order_date: se o pedido já existe mas o order_date está ausente OU claramente errado,
+            // tenta ajustar sem calls extras; se não der, agenda busca do detalhe do pedido.
+            const candidate = getCandidateFromList(orderObj);
+            if (candidate) {
+              if (shouldUpdateOrderDate(order.orderDate ?? null, candidate)) addBackfillOrderDate(order.orderCode, candidate);
+            } else if (!order.orderDate || isMidnightUtc(order.orderDate)) {
+              // se não veio hora/created na listagem e o que temos é nulo/00:00:00, tenta no detalhe
+              orderCodesNeedingDetailBackfill.add(order.orderCode);
+            }
+
             ordersToUpdate.push(order);
             processedOrders += 1;
-            dayProcessed += 1;
-            currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
+            currentAction = rangeTotal ? `processando (${processedOrders}/${rangeTotal})` : "processando";
             updateProgress(processedOrders % 10 === 0);
             continue;
           }
@@ -1018,13 +1176,65 @@ async function main() {
           ordersToInsert.push(order);
 
           processedOrders += 1;
-          dayProcessed += 1;
-          currentAction = dayTotal ? `processando (${dayProcessed}/${dayTotal})` : "processando";
+          currentAction = rangeTotal ? `processando (${processedOrders}/${rangeTotal})` : "processando";
           updateProgress(processedOrders % 10 === 0);
+        }
+
+        // Se o pedido já existe mas a listagem não trouxe hora/created, buscamos detalhe para preencher order_date corretamente.
+        if (orderCodesNeedingDetailBackfill.size > 0) {
+          const ids = Array.from(orderCodesNeedingDetailBackfill);
+          for (const group of chunkArray(ids, 5)) {
+            // eslint-disable-next-line no-await-in-loop
+            await Promise.all(
+              group.map(async (orderCode) => {
+                try {
+                  const cached = orderDetailCache.get(orderCode);
+                  let dateFromDetail: string | null = cached?.date ?? null;
+                  let hourFromDetail: string | null = cached?.hour ?? null;
+                  let createdFromDetail: string | null = cached?.marketplaceCreated ?? null;
+                  let modifiedFromDetail: string | null = cached?.modified ?? null;
+
+                  if (!cached) {
+                    const { json: detailJson } = await trayGetJson(ctx, `/orders/${encodeURIComponent(String(orderCode))}`, reauth);
+                    const root = asRecord(detailJson) ?? {};
+                    const det = asRecord(root.Order) ?? asRecord(root.order) ?? root;
+                    dateFromDetail = normalizeDateString(pickString(det, "date"));
+                    hourFromDetail = pickString(det, "hour");
+                    modifiedFromDetail = pickString(det, "modified");
+                    const detMoArr = ensureArray((det as any)?.MarketplaceOrder);
+                    const detMo0 = detMoArr.length ? asRecord(detMoArr[0]) : null;
+                    createdFromDetail = detMo0 ? pickString(detMo0, "created") : null;
+                    orderDetailCache.set(orderCode, {
+                      date: dateFromDetail,
+                      hour: hourFromDetail,
+                      marketplaceCreated: createdFromDetail,
+                      modified: modifiedFromDetail,
+                    });
+                  }
+
+                  const hourHms = normalizeTimeHms(hourFromDetail);
+                  const candidate =
+                    parseDateTimeFromSql(createdFromDetail) ??
+                    (hourHms ? parseDateTimeFromYmdHms(dateFromDetail, hourHms) : null) ??
+                    // fallback final: se não tiver hour nem created, tenta modified para não ficar NULL
+                    parseDateTimeFromSql(modifiedFromDetail);
+                  if (candidate) {
+                    const existing = existingOrdersByCode.get(orderCode) ?? null;
+                    if (!existing || shouldUpdateOrderDate(existing.orderDate ?? null, candidate)) addBackfillOrderDate(orderCode, candidate);
+                  }
+                } catch (e) {
+                  // não derruba job por falha de detalhe
+                  failedOrdersCount += 1;
+                  console.error(`[tray:orders] falha ao buscar detalhe p/ backfill order_date. order_code=${orderCode}`, e);
+                }
+              }),
+            );
+          }
         }
 
         // Persiste em lote (por página) para reduzir roundtrips no banco.
         if (ordersToUpdate.length > 0) {
+          updatedOrdersCount += ordersToUpdate.length;
           // Evita TypeORM save() para updates simples (status), pois ele faz SELECTs internos e aumenta latência/locks.
           // Fazemos UPDATE em lote via SQL: UPDATE orders SET ... FROM (VALUES ...) v WHERE company_id=? AND order_code=v.order_code
           const updates = ordersToUpdate
@@ -1086,6 +1296,36 @@ async function main() {
           }
         }
 
+        // Backfill de order_date (somente quando está NULL no banco)
+        if (backfillOrderDates.length > 0) {
+          for (const batch of chunkArray(backfillOrderDates, 10)) {
+            if (batch.length === 0) continue;
+            const valuesSql = batch.map((_, idx) => `($${2 + idx * 2}::int, $${3 + idx * 2}::timestamp)`).join(", ");
+            const sql = `
+              UPDATE orders o
+              SET order_date = v.order_date
+              FROM (VALUES ${valuesSql}) AS v(order_code, order_date)
+              WHERE o.company_id = $1
+                AND o.order_code = v.order_code
+                AND (
+                  o.order_date IS NULL
+                  OR date(o.order_date) <> date(v.order_date)
+                  OR (o.order_date::time = '00:00:00' AND v.order_date::time <> '00:00:00')
+                )
+              RETURNING o.order_code
+            `;
+            const params: any[] = [companyEntity.id];
+            for (const u of batch) params.push(u.orderCode, u.orderDate);
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              const updatedRows = await withRetry(`db backfill order_date (n=${batch.length})`, () => AppDataSource.query(sql, params), 3);
+              orderDatesBackfilledCount += Array.isArray(updatedRows) ? updatedRows.length : 0;
+            } catch (err) {
+              console.error("[tray:orders] falha ao backfill de order_date; seguindo:", err);
+            }
+          }
+        }
+
         let insertedOrders: Order[] = [];
         let insertedOrdersForItems: Order[] = [];
         if (ordersToInsert.length > 0) {
@@ -1093,6 +1333,7 @@ async function main() {
             // eslint-disable-next-line no-await-in-loop
             insertedOrders = await withRetry("save orders batch(insert)", () => orderRepo.save(ordersToInsert, { chunk: 10 }), 3);
             insertedOrdersForItems = insertedOrders;
+            insertedOrdersCount += insertedOrdersForItems.length;
           } catch (err) {
             console.error("[tray:orders] falha ao salvar lote de inserts; fallback por pedido:", err);
             for (const o of ordersToInsert) {
@@ -1101,6 +1342,7 @@ async function main() {
                 const saved = await withRetry(`save order(insert) order_code=${o.orderCode}`, () => orderRepo.save(o), 3);
                 insertedOrders.push(saved);
                 insertedOrdersForItems.push(saved);
+                insertedOrdersCount += 1;
               } catch (err2: any) {
                 // concorrência: pode cair em unique no insert
                 const code = err2?.driverError?.code ?? err2?.code;
@@ -1128,11 +1370,13 @@ async function main() {
                   try {
                     // eslint-disable-next-line no-await-in-loop
                     await orderRepo.save(existing, { reload: false });
+                    upsertedOrdersCount += 1;
                   } catch (err3) {
                     console.error(
                       `[tray:orders] falha ao atualizar após unique; pulando. company_id=${companyEntity.id} order_code=${o.orderCode}`,
                       err3,
                     );
+                    failedOrdersCount += 1;
                   }
                   continue;
                 }
@@ -1140,6 +1384,7 @@ async function main() {
                   `[tray:orders] erro ao inserir pedido; pulando. company_id=${companyEntity.id} order_code=${o.orderCode}`,
                   err2,
                 );
+                failedOrdersCount += 1;
               }
             }
           }
@@ -1213,8 +1458,7 @@ async function main() {
         const offset = pickNumber(paging, "offset") ?? (currentPage - 1) * currentLimit;
         const nextOffset = offset + currentLimit;
         if (total !== null && nextOffset >= total) break;
-        page += 1;
-      }
+      page += 1;
     }
 
     currentAction = "finalizando";
@@ -1223,7 +1467,7 @@ async function main() {
     console.log(
       `[tray:orders] company=${companyIdNum} range=${formatDate(start)}..${formatDate(
         end,
-      )} orders_processed=${processedOrders} customers_created=${createdCustomers}`,
+      )} orders_processed=${processedOrders} inserted=${insertedOrdersCount} upserted=${upsertedOrdersCount} updated=${updatedOrdersCount} order_dates_backfilled=${orderDatesBackfilledCount} failed=${failedOrdersCount} skipped_only_insert=${skippedOnlyInsertCount} customers_created=${createdCustomers}`,
     );
 
     if (stats.missing.size > 0) {
@@ -1239,6 +1483,12 @@ async function main() {
 
     processedOrdersForLog = processedOrders;
     createdCustomersForLog = createdCustomers;
+    insertedOrdersForLog = insertedOrdersCount;
+    upsertedOrdersForLog = upsertedOrdersCount;
+    updatedOrdersForLog = updatedOrdersCount;
+    orderDatesBackfilledForLog = orderDatesBackfilledCount;
+    failedOrdersForLog = failedOrdersCount;
+    skippedOnlyInsertForLog = skippedOnlyInsertCount;
 
     // finaliza o mesmo registro
     try {
@@ -1258,6 +1508,12 @@ async function main() {
               onlyInsert,
               status: "FINALIZADO",
               orders_processed: processedOrdersForLog,
+              inserted: insertedOrdersForLog,
+              upserted: upsertedOrdersForLog,
+              updated: updatedOrdersForLog,
+              order_dates_backfilled: orderDatesBackfilledForLog,
+              failed: failedOrdersForLog,
+              skipped_only_insert: skippedOnlyInsertForLog,
               customers_created: createdCustomersForLog,
             },
             errors: null as any,
@@ -1281,6 +1537,12 @@ async function main() {
               onlyInsert,
               status: "FINALIZADO",
               orders_processed: processedOrdersForLog,
+              inserted: insertedOrdersForLog,
+              upserted: upsertedOrdersForLog,
+              updated: updatedOrdersForLog,
+              order_dates_backfilled: orderDatesBackfilledForLog,
+              failed: failedOrdersForLog,
+              skipped_only_insert: skippedOnlyInsertForLog,
               customers_created: createdCustomersForLog,
             },
             errors: null,
@@ -1310,6 +1572,12 @@ async function main() {
               onlyInsert,
               status: "ERRO",
               orders_processed: processedOrdersForLog,
+              inserted: insertedOrdersForLog,
+              upserted: upsertedOrdersForLog,
+              updated: updatedOrdersForLog,
+              order_dates_backfilled: orderDatesBackfilledForLog,
+              failed: failedOrdersForLog,
+              skipped_only_insert: skippedOnlyInsertForLog,
               customers_created: createdCustomersForLog,
             },
             errors: errorPayload as any,
@@ -1333,6 +1601,12 @@ async function main() {
               onlyInsert,
               status: "ERRO",
               orders_processed: processedOrdersForLog,
+              inserted: insertedOrdersForLog,
+              upserted: upsertedOrdersForLog,
+              updated: updatedOrdersForLog,
+              order_dates_backfilled: orderDatesBackfilledForLog,
+              failed: failedOrdersForLog,
+              skipped_only_insert: skippedOnlyInsertForLog,
               customers_created: createdCustomersForLog,
             },
             errors: errorPayload,
