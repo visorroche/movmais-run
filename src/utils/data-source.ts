@@ -35,9 +35,8 @@ export const AppDataSource = new DataSource({
     options: `-c statement_timeout=${Number(process.env.DB_STATEMENT_TIMEOUT_MS ?? 300_000)}`, // 5 min
   },
   // IMPORTANTE:
-  // Em produção, NUNCA use synchronize em banco com dados/tabelas existentes:
-  // isso pode gerar ALTER/DROP indesejado e/ou corrida entre processos (ADD COLUMN "já existe").
-  // Padrão: false. Para habilitar explicitamente (apenas dev): TYPEORM_SYNC=true
+  // Padrão: false. Só habilite explicitamente em DEV (TYPEORM_SYNC=true).
+  // Em projetos concorrentes apontando pro mesmo banco, isso pode causar ALTER/DROP.
   synchronize: process.env.TYPEORM_SYNC === "true",
   logging: false,
   namingStrategy: new SnakeNamingStrategy(),
