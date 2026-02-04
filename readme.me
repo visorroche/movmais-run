@@ -8,6 +8,8 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 | Freight Orders | Allpost | `allpost:orders` | **a cada 1 hora** | Roda na inicialização após ~3s. Range sobreposto (**últimos 2 dias UTC**) para capturar atualizações. |
 | Orders | Precode | `precode:orders` | **a cada 30 min** | Roda na inicialização após ~4s. Range curto (**ontem..hoje UTC**) |
 | Orders | Tray | `tray:orders` | **a cada 30 min** | Roda na inicialização após ~6s. Range curto (**ontem..hoje UTC**) |
+| Orders | AnyMarket | `anymarket:orders` | **a cada 30 min** | Roda na inicialização (após ~14s). Range curto (**ontem..hoje UTC**) + 2 passes (created/updated). |
 | Products | Precode | `precode:products` | **a cada 3 horas** | Roda na inicialização (após ~8s). |
 | Products | Tray | `tray:products` | **a cada 3 horas** | Roda na inicialização (após ~10s). |
+| Products | AnyMarket | `anymarket:products` | **a cada 3 horas** | Roda na inicialização (após ~12s). Config: `{"token":"..."}` |
 

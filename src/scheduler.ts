@@ -15,6 +15,8 @@ type JobName =
   | "allpost:orders"
   | "precode:products"
   | "tray:products"
+  | "anymarket:products"
+  | "anymarket:orders"
   | "precode:orders"
   | "tray:orders";
 
@@ -105,6 +107,22 @@ function startHttpServer() {
       products: {
         scriptRel: "commands/tray/trayProducts.js",
         buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+    },
+    anymarket: {
+      products: {
+        scriptRel: "commands/anymarket/anymarketProducts.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      orders: {
+        scriptRel: "commands/anymarket/anymarketOrders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
       },
     },
     precode: {
@@ -397,6 +415,10 @@ async function main() {
     runJob("tray:products", async () => {
       await runForCompanies("tray", "commands/tray/trayProducts.js", (companyId) => [`--company=${companyId}`]);
     });
+  const tickAnymarketProducts = () =>
+    runJob("anymarket:products", async () => {
+      await runForCompanies("anymarket", "commands/anymarket/anymarketProducts.js", (companyId) => [`--company=${companyId}`]);
+    });
 
   // job: orders (a cada 30 min) — roda um range curto (ontem..hoje UTC) para capturar atualizações
   const tickPrecodeOrders = () =>
@@ -419,9 +441,21 @@ async function main() {
         `--end-date=${end}`,
       ]);
     });
+  const tickAnymarketOrders = () =>
+    runJob("anymarket:orders", async () => {
+      const end = formatYmdUtc(utcMidnight(new Date()));
+      const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
+      await runForCompanies("anymarket", "commands/anymarket/anymarketOrders.js", (companyId) => [
+        `--company=${companyId}`,
+        `--start-date=${start}`,
+        `--end-date=${end}`,
+      ]);
+    });
 
   console.log("[scheduler] iniciado.");
-  console.log("[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h");
+  console.log(
+    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h (precode/tray/anymarket)",
+  );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
   setTimeout(() => void tickAllpost(), 2_000);
@@ -430,14 +464,18 @@ async function main() {
   setTimeout(() => void tickTrayOrders(), 6_000);
   setTimeout(() => void tickPrecodeProducts(), 8_000);
   setTimeout(() => void tickTrayProducts(), 10_000);
+  setTimeout(() => void tickAnymarketProducts(), 12_000);
+  setTimeout(() => void tickAnymarketOrders(), 14_000);
 
   const timers: NodeJS.Timeout[] = [];
   timers.push(setInterval(() => void tickAllpost(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickAllpostFreightOrders(), EVERY_1_HOUR));
   timers.push(setInterval(() => void tickPrecodeOrders(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickTrayOrders(), EVERY_30_MIN));
+  timers.push(setInterval(() => void tickAnymarketOrders(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickPrecodeProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickTrayProducts(), EVERY_3_HOURS));
+  timers.push(setInterval(() => void tickAnymarketProducts(), EVERY_3_HOURS));
 
   // loop “keep alive” para permitir shutdown gracioso
   while (!shuttingDown) {

@@ -117,4 +117,22 @@ export function mapTrayStatus(raw: string, customMap?: Record<string, OrderStatu
   return mapped;
 }
 
+export function mapAnymarketStatus(raw: string): OrderStatus {
+  const key = raw.trim().toUpperCase();
+  const mapping: Record<string, OrderStatus> = {
+    CONCLUDED: "entregue",
+    CANCELED: "cancelado",
+    CANCELLED: "cancelado",
+    INVOICED: "faturando",
+    PAID_WAITING_DELIVERY: "em transporte",
+    PAID_WAITING_SHIP: "aguardando transporte",
+    PENDING: "aguardando pagamento",
+  };
+  const mapped = mapping[key];
+  if (!mapped) {
+    throw new Error(`Status AnyMarket sem mapeamento: "${raw}"`);
+  }
+  return mapped;
+}
+
 
