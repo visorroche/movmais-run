@@ -3,6 +3,7 @@ import { Customer } from "./Customer.js";
 import { OrderItem } from "./OrderItem.js";
 import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
+import { Representative } from "./Representative.js";
 
 @Entity({ name: "orders" })
 @Unique("UQ_orders_company_id_order_code", ["company", "orderCode"])
@@ -108,6 +109,10 @@ export class Order {
   @ManyToOne(() => Plataform, { nullable: true })
   @JoinColumn({ name: "platform_id" })
   platform?: Plataform;
+
+  @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "representative_id" })
+  representative?: Representative | null;
 
   @OneToMany(() => OrderItem, (item: OrderItem) => item.order)
   items?: OrderItem[];

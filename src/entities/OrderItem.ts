@@ -29,6 +29,9 @@ export class OrderItem {
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   netUnitPrice?: string | null; // valorUnitarioLiquido
 
+  @Column({ type: "numeric", precision: 14, scale: 2, default: 0 })
+  comission!: string;
+
   @Column({ type: "integer", nullable: true })
   quantity?: number | null; // quantidade
 

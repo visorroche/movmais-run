@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Unique } from "typeorm";
 import { Company } from "./Company.js";
 import { Order } from "./Order.js";
+import { Representative } from "./Representative.js";
 
 @Entity({ name: "customers" })
 @Unique("UQ_customers_company_id_external_id", ["company", "externalId"])
@@ -52,6 +53,11 @@ export class Customer {
   // payload "cru" do parceiro (somente para logs/auditoria)
   @Column({ type: "jsonb", nullable: true })
   raw?: unknown;
+
+  /** Representante da carteira do cliente; vendas do cliente costumam ser lançadas nesse representante. */
+  @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "representative_id" })
+  representative?: Representative | null;
 
   @OneToMany(() => Order, (order: Order) => order.customer)
   orders?: Order[];

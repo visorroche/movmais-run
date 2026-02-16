@@ -23,4 +23,13 @@ export class Company {
 
   @OneToMany(() => CompanyUser, (cu: CompanyUser) => cu.company)
   companyUsers?: CompanyUser[];
+
+  // Configura quais "dashboards" aparecem no menu do front.
+  // Defaults true para manter comportamento atual.
+  @Column({ name: 'has_representatives', type: 'boolean', default: true })
+  has_representatives!: boolean;
+
+  @Column({ name: 'sells_on_marketplaces', type: 'boolean', default: true })
+  sells_on_marketplaces!: boolean;
+
 }
