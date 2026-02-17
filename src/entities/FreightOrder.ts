@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique, Index } from "typeorm";
 import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
 
 @Entity({ name: "freight_orders" })
+@Index("idx_freight_orders_company_date", ["company", "date"])
 @Unique("UQ_freight_orders_company_id_platform_id_external_id", ["company", "platform", "externalId"])
 export class FreightOrder {
   @PrimaryGeneratedColumn()
@@ -15,6 +16,14 @@ export class FreightOrder {
   // AllPost: data (ex: "2022-10-01 00:00:00")
   @Column({ type: "timestamptz", nullable: true })
   orderDate?: Date | null;
+
+  /** Data no fuso Brasil, formato YYYY-MM-DD (ex.: 2026-01-01). Derivada de orderDate. */
+  @Column({ type: "varchar", length: 10, nullable: true })
+  date?: string | null;
+
+  /** Horário no fuso Brasil, formato HH:mm:ss (ex.: 12:59:59). Derivado de orderDate. */
+  @Column({ type: "varchar", length: 8, nullable: true })
+  time?: string | null;
 
   // AllPost: numeroPedido
   @Column({ type: "varchar", nullable: true })
@@ -32,7 +41,7 @@ export class FreightOrder {
   @Column({ type: "varchar", nullable: true })
   channel?: string | null;
 
-  // AllPost: valorFreteCobrado
+  // AllPost: valorFretePedido
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   freightAmount?: string | null;
 
@@ -43,6 +52,10 @@ export class FreightOrder {
   // AllPost: valorFreteDiferencaPedidoCotacao
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   deltaQuote?: string | null;
+
+  /** Soma de envio[].notaFiscal.valorTotalProdutos (valor total dos produtos na NF). */
+  @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
+  invoiceValue?: string | null;
 
   // enderecoEntrega.*
   @Column({ type: "varchar", nullable: true })
@@ -69,6 +82,10 @@ export class FreightOrder {
   // derivados de envio[] (sempre max)
   @Column({ type: "timestamptz", nullable: true })
   estimatedDeliveryDate?: Date | null; // max(envio.prazoEntregaPedido)
+
+  /** Número de dias (calendário) entre date e estimated_delivery_date (sempre no fuso Brasil). */
+  @Column({ type: "integer", nullable: true })
+  numDeliveryDays?: number | null;
 
   @Column({ type: "timestamptz", nullable: true })
   deliveryDate?: Date | null; // max(envio.dataEntrega)

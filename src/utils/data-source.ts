@@ -15,6 +15,7 @@ import { FreightQuote } from "../entities/FreightQuote.js";
 import { FreightQuoteItem } from "../entities/FreightQuoteItem.js";
 import { FreightQuoteOption } from "../entities/FreightQuoteOption.js";
 import { FreightOrder } from "../entities/FreightOrder.js";
+import { FreightOrderItem } from "../entities/FreightOrderItem.js";
 import { IntegrationLog } from "../entities/IntegrationLog.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
@@ -57,6 +58,7 @@ export const AppDataSource = new DataSource({
     FreightQuoteItem,
     FreightQuoteOption,
     FreightOrder,
+    FreightOrderItem,
     IntegrationLog,
   ],
   migrations: [],

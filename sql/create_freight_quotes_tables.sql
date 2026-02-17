@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS freight_quotes (
   total_volume  numeric(14,6) NULL,
   total_packages integer NULL,
 
+  best_deadline     integer NULL,
+  best_freight_cost numeric(14,2) NULL,
+
   store_limit   integer NULL,
   channel_limit integer NULL,
 
@@ -119,6 +122,7 @@ CREATE TABLE IF NOT EXISTS freight_orders (
   freight_amount numeric(14,2) NULL,
   freight_cost numeric(14,2) NULL,
   delta_quote numeric(14,2) NULL,
+  invoice_value numeric(14,2) NULL,
 
   address varchar NULL,
   address_zip varchar NULL,
@@ -129,6 +133,7 @@ CREATE TABLE IF NOT EXISTS freight_orders (
   address_complement varchar NULL,
 
   estimated_delivery_date timestamptz NULL,
+  num_delivery_days integer NULL,
   delivery_date timestamptz NULL,
   delta_quote_delivery_date numeric(14,2) NULL,
 
@@ -136,6 +141,31 @@ CREATE TABLE IF NOT EXISTS freight_orders (
 
   company_id integer NOT NULL,
   platform_id integer NULL
+);
+
+CREATE TABLE IF NOT EXISTS freight_order_items (
+  id SERIAL PRIMARY KEY,
+
+  company_id integer NOT NULL,
+  order_id integer NOT NULL,
+  product_id integer NULL,
+
+  line_index integer NOT NULL,
+  envio_index integer NULL,
+
+  partner_sku     varchar NULL,
+  partner_sku_id  varchar NULL,
+  title          varchar NULL,
+
+  quantity integer NULL,
+  price    numeric(14,2) NULL,
+  volumes  integer NULL,
+  weight   numeric(14,3) NULL,
+
+  category  varchar NULL,
+  variation varchar NULL,
+
+  raw jsonb NULL
 );
 
 CREATE TABLE IF NOT EXISTS logs (
@@ -182,6 +212,15 @@ BEGIN
   ALTER TABLE freight_orders
     ADD CONSTRAINT "UQ_freight_orders_company_id_platform_id_external_id"
     UNIQUE (company_id, platform_id, external_id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_order_items
+    ADD CONSTRAINT "UQ_freight_order_items_order_id_line_index"
+    UNIQUE (order_id, line_index);
 EXCEPTION WHEN duplicate_object THEN
   NULL;
 END $$;
@@ -255,6 +294,33 @@ BEGIN
   ALTER TABLE freight_orders
     ADD CONSTRAINT "FK_freight_orders_platform_id"
     FOREIGN KEY (platform_id) REFERENCES platforms(id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_order_items
+    ADD CONSTRAINT "FK_freight_order_items_company_id"
+    FOREIGN KEY (company_id) REFERENCES companies(id);
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_order_items
+    ADD CONSTRAINT "FK_freight_order_items_order_id"
+    FOREIGN KEY (order_id) REFERENCES freight_orders(id) ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TABLE freight_order_items
+    ADD CONSTRAINT "FK_freight_order_items_product_id"
+    FOREIGN KEY (product_id) REFERENCES products(id);
 EXCEPTION WHEN duplicate_object THEN
   NULL;
 END $$;

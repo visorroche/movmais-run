@@ -11,6 +11,7 @@ import { FreightQuoteItem } from "../../entities/FreightQuoteItem.js";
 import { FreightQuoteOption } from "../../entities/FreightQuoteOption.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
+import { toBrazilDateAndTime } from "../../utils/brazil-date-time.js";
 
 type Args = { company: number };
 
@@ -113,6 +114,53 @@ function isUniqueViolation(err: unknown): boolean {
   if (!(err instanceof QueryFailedError)) return false;
   const anyErr = err as unknown as { driverError?: { code?: string } };
   return anyErr.driverError?.code === "23505";
+}
+
+/** Opção com deadline (carrierDeadline) e preço (shippingValue numérico) para escolha da melhor. */
+type BestOptionRow = { deadline: number; price: number; shippingValueStr: string };
+
+/**
+ * Escolhe a melhor opção: se existir uma opção dominante (menor deadline e menor preço), usa ela;
+ * senão usa a opção com menor score: (deadline/min_deadline) + (price/min_price).
+ * Sempre retorna deadline e preço da mesma linha.
+ */
+function selectBestOption(
+  rows: BestOptionRow[],
+): { bestDeadline: number | null; bestFreightCost: string | null } {
+  const valid = rows.filter(
+    (r) =>
+      r.deadline != null &&
+      Number.isFinite(r.deadline) &&
+      r.deadline > 0 &&
+      r.price != null &&
+      Number.isFinite(r.price) &&
+      r.price >= 0,
+  );
+  if (valid.length === 0) return { bestDeadline: null, bestFreightCost: null };
+
+  const minDeadline = Math.min(...valid.map((r) => r.deadline));
+  const minPrice = Math.min(...valid.map((r) => r.price));
+
+  const dominant = valid.find((r) => r.deadline === minDeadline && r.price === minPrice);
+  if (dominant) {
+    return { bestDeadline: dominant.deadline, bestFreightCost: dominant.shippingValueStr };
+  }
+
+  const safeMinPrice = minPrice > 0 ? minPrice : 1;
+  const first = valid[0];
+  if (!first) return { bestDeadline: null, bestFreightCost: null };
+  let best: BestOptionRow = first;
+  let bestScore = best.deadline / minDeadline + best.price / safeMinPrice;
+  for (let i = 1; i < valid.length; i += 1) {
+    const r = valid[i];
+    if (!r) continue;
+    const score = r.deadline / minDeadline + r.price / safeMinPrice;
+    if (score < bestScore) {
+      bestScore = score;
+      best = r;
+    }
+  }
+  return { bestDeadline: best.deadline, bestFreightCost: best.shippingValueStr };
 }
 
 async function httpGetJson(url: string, bearerToken: string): Promise<unknown> {
@@ -294,13 +342,37 @@ async function main() {
       const input = asRecord(obj.dadosEntrada ?? null) ?? {};
       const cart = asRecord(input.carrinho ?? null) ?? {};
 
+      const quotedAt = parseDate(pickString(partnerReturn, "dataCotacao"));
+      const { date: quoteDate, time: quoteTime } = toBrazilDateAndTime(quotedAt);
+
+      const optionsForBest = ensureArray(obj.opcoesEntrega);
+      const bestOptionRows: BestOptionRow[] = [];
+      for (const opt of optionsForBest) {
+        const optObj = asRecord(opt);
+        if (!optObj) continue;
+        const prazoEntrega = asRecord(optObj.prazoEntrega ?? null) ?? {};
+        const deadline = pickNumber(prazoEntrega, "prazoTransportadora");
+        const shippingValueStr = toNumericString(pickNumber(optObj, "freteCobrar") ?? pickString(optObj, "freteCobrar"));
+        const price = shippingValueStr != null ? Number(shippingValueStr) : NaN;
+        if (deadline != null && deadline > 0 && Number.isFinite(price) && price >= 0 && shippingValueStr != null) {
+          bestOptionRows.push({ deadline, price, shippingValueStr });
+        }
+      }
+      const { bestDeadline, bestFreightCost } = selectBestOption(bestOptionRows);
+
       const entity = quoteRepo.create({
         company: companyRef,
         platform,
         quoteId,
         partnerPlatform: pickString(partnerReturn, "plataforma"),
         externalQuoteId: pickString(partnerReturn, "idCotacaoExterno"),
-        quotedAt: parseDate(pickString(partnerReturn, "dataCotacao")),
+        quotedAt,
+
+        date: quoteDate,
+        time: quoteTime,
+
+        bestDeadline,
+        bestFreightCost,
 
         destinationZip: pickString(destination, "cep") ?? toNumericString(pickNumber(destination, "cep")),
         destinationState: pickString(destination, "uf"),

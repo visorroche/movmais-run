@@ -18,7 +18,8 @@ type JobName =
   | "anymarket:products"
   | "anymarket:orders"
   | "precode:orders"
-  | "tray:orders";
+  | "tray:orders"
+  | "resume:freight";
 
 const JOB_LOCKS = new Map<JobName, boolean>();
 let shuttingDown = false;
@@ -374,6 +375,7 @@ async function main() {
   const EVERY_30_MIN = 30 * 60 * 1000;
   const EVERY_1_HOUR = 60 * 60 * 1000;
   const EVERY_3_HOURS = 3 * 60 * 60 * 1000;
+  const EVERY_24_HOURS = 24 * 60 * 60 * 1000;
 
   process.on("SIGINT", () => {
     shuttingDown = true;
@@ -452,9 +454,18 @@ async function main() {
       ]);
     });
 
+  const tickResumeFreight = () =>
+    runJob("resume:freight", async () => {
+      await runNodeScript(
+        resolveDistScript("commands/resume/freight.js"),
+        [],
+        "resume:freight",
+      );
+    });
+
   console.log("[scheduler] iniciado.");
   console.log(
-    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h (precode/tray/anymarket)",
+    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h (precode/tray/anymarket), resume:freight=24h",
   );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
@@ -466,6 +477,7 @@ async function main() {
   setTimeout(() => void tickTrayProducts(), 10_000);
   setTimeout(() => void tickAnymarketProducts(), 12_000);
   setTimeout(() => void tickAnymarketOrders(), 14_000);
+  setTimeout(() => void tickResumeFreight(), 20_000);
 
   const timers: NodeJS.Timeout[] = [];
   timers.push(setInterval(() => void tickAllpost(), EVERY_30_MIN));
@@ -476,6 +488,7 @@ async function main() {
   timers.push(setInterval(() => void tickPrecodeProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickTrayProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickAnymarketProducts(), EVERY_3_HOURS));
+  timers.push(setInterval(() => void tickResumeFreight(), EVERY_24_HOURS));
 
   // loop “keep alive” para permitir shutdown gracioso
   while (!shuttingDown) {

@@ -7,11 +7,13 @@ import { Company } from "../../entities/Company.js";
 import { Plataform } from "../../entities/Plataform.js";
 import { CompanyPlataform } from "../../entities/CompanyPlataform.js";
 import { FreightOrder } from "../../entities/FreightOrder.js";
+import { FreightOrderItem } from "../../entities/FreightOrderItem.js";
 import { FreightQuote } from "../../entities/FreightQuote.js";
 import { FreightQuoteItem } from "../../entities/FreightQuoteItem.js";
 import { FreightQuoteOption } from "../../entities/FreightQuoteOption.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
+import { toBrazilDateAndTime, toBrazilDateString } from "../../utils/brazil-date-time.js";
 
 type Args = {
   company: number;
@@ -19,6 +21,7 @@ type Args = {
   endDate: string;
   dataTipo: string;
   limit: number;
+  force: boolean;
 };
 
 function normalizeStartEndValue(value: string): string {
@@ -33,6 +36,15 @@ function extractYmd(value: string): string | null {
   const v = String(value || "").trim();
   const m = /^(\d{4}-\d{2}-\d{2})/.exec(v);
   return m?.[1] ?? null;
+}
+
+/** Dias de calendário entre duas datas YYYY-MM-DD (interpretadas como UTC noon para evitar bordas de fuso). */
+function daysBetween(dateStrStart: string | null, dateStrEnd: string | null): number | null {
+  if (!dateStrStart || !dateStrEnd) return null;
+  const d1 = new Date(dateStrStart + "T12:00:00Z");
+  const d2 = new Date(dateStrEnd + "T12:00:00Z");
+  if (!Number.isFinite(d1.getTime()) || !Number.isFinite(d2.getTime())) return null;
+  return Math.round((d2.getTime() - d1.getTime()) / (24 * 60 * 60 * 1000));
 }
 
 function ymdToDate(value: string | null): Date | null {
@@ -85,7 +97,12 @@ function parseArgs(argv: string[]): Args {
     throw new Error("Parâmetro inválido: --limit=N (1..500).");
   }
 
-  return { company, startDate, endDate, dataTipo, limit };
+  const forceRaw = raw.get("force");
+  const force =
+    raw.has("force") &&
+    (forceRaw === undefined || forceRaw === "" || forceRaw.toLowerCase() === "true" || forceRaw === "1");
+
+  return { company, startDate, endDate, dataTipo, limit, force };
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -243,8 +260,9 @@ async function main() {
   let pageForLog = 1;
   let fetchedForLog = 0;
   let insertedForLog = 0;
-  let skippedExistingForLog = 0;
-  let skippedDuplicateForLog = 0;
+    let updatedForLog = 0;
+    let skippedExistingForLog = 0;
+    let skippedDuplicateForLog = 0;
   let invalidRowsForLog = 0;
   let quotesEnsuredForLog = 0;
   let quotesFailedForLog = 0;
@@ -254,6 +272,7 @@ async function main() {
     const platformRepo = AppDataSource.getRepository(Plataform);
     const cpRepo = AppDataSource.getRepository(CompanyPlataform);
     const orderRepo = AppDataSource.getRepository(FreightOrder);
+    const orderItemRepo = AppDataSource.getRepository(FreightOrderItem);
     const quoteRepo = AppDataSource.getRepository(FreightQuote);
     const quoteItemRepo = AppDataSource.getRepository(FreightQuoteItem);
     const quoteOptionRepo = AppDataSource.getRepository(FreightQuoteOption);
@@ -495,6 +514,7 @@ async function main() {
     let page = 1;
     let fetched = 0;
     let inserted = 0;
+    let updated = 0;
     let skippedExisting = 0;
     let skippedDuplicateOnInsert = 0;
     let invalidRows = 0;
@@ -527,14 +547,20 @@ async function main() {
 
       const externalIds = Array.from(byExternalId.keys());
       let existingExternalIds = new Set<string>();
+      const existingOrderIdByExternalId = new Map<string, number>();
       if (externalIds.length > 0) {
         try {
           // eslint-disable-next-line no-await-in-loop
           const existing = await orderRepo.find({
-            select: { externalId: true },
+            select: { id: true, externalId: true },
             where: { company: { id: company.id }, platform: { id: platformRef.id }, externalId: In(externalIds) },
           });
           existingExternalIds = new Set(existing.map((e) => e.externalId));
+          if (args.force) {
+            for (const e of existing) {
+              existingOrderIdByExternalId.set(e.externalId, e.id);
+            }
+          }
         } catch (err) {
           if (isMissingTable(err)) {
             throw new Error(
@@ -546,7 +572,10 @@ async function main() {
       }
 
       for (const [externalId, obj] of byExternalId.entries()) {
-        if (existingExternalIds.has(externalId)) {
+        const existingId = existingOrderIdByExternalId.get(externalId);
+        const isExisting = existingExternalIds.has(externalId);
+
+        if (isExisting && !args.force) {
           skippedExisting += 1;
           continue;
         }
@@ -566,33 +595,44 @@ async function main() {
           }
         }
 
-        // envio[]: pegar sempre o maior valor
+        // envio[]: pegar sempre o maior valor; somar valorTotalProdutos das NFs
         const envios = ensureArray(obj.envio);
         let maxPrazoEntregaPedido: Date | null = null;
         let maxDataEntrega: Date | null = null;
         let maxDelta: number | null = null;
+        let sumValorTotalProdutos: number | null = null;
         for (const e of envios) {
           const eObj = asRecord(e);
           if (!eObj) continue;
           maxPrazoEntregaPedido = maxDate(maxPrazoEntregaPedido, parsePartnerDate(pickString(eObj, "prazoEntregaPedido")));
           maxDataEntrega = maxDate(maxDataEntrega, parsePartnerDate(pickString(eObj, "dataEntrega")));
           maxDelta = maxNumber(maxDelta, pickNumber(eObj, "diferencaPedidoCotacao"));
+          const notaFiscal = asRecord(eObj.notaFiscal ?? null);
+          if (notaFiscal) {
+            const v = pickNumber(notaFiscal, "valorTotalProdutos");
+            if (v != null) sumValorTotalProdutos = (sumValorTotalProdutos ?? 0) + v;
+          }
         }
 
-        const entity = orderRepo.create({
-          company: companyRef,
-          platform: platformRef,
-          externalId,
-          orderDate: parsePartnerDate(pickString(obj, "data")),
+        const orderDate = parsePartnerDate(pickString(obj, "data"));
+        const { date: orderDateOnly, time: orderTimeOnly } = toBrazilDateAndTime(orderDate);
+        const estimatedDateStr = toBrazilDateString(maxPrazoEntregaPedido);
+        const numDeliveryDays = daysBetween(orderDateOnly, estimatedDateStr);
+
+        const orderPayload = {
+          orderDate,
+          date: orderDateOnly,
+          time: orderTimeOnly,
           orderCode: normalizeOrderCode(pickString(obj, "numeroPedido")),
           storeName: pickString(obj, "nomeLoja"),
           quoteId: quoteIdFromOrder,
           channel: pickString(obj, "canal"),
-          freightAmount: toNumericString(pickNumber(obj, "valorFreteCobrado") ?? pickString(obj, "valorFreteCobrado")),
+          freightAmount: toNumericString(pickNumber(obj, "valorFretePedido") ?? pickString(obj, "valorFretePedido")),
           freightCost: toNumericString(pickNumber(obj, "valorFreteReal") ?? pickString(obj, "valorFreteReal")),
           deltaQuote: toNumericString(
             pickNumber(obj, "valorFreteDiferencaPedidoCotacao") ?? pickString(obj, "valorFreteDiferencaPedidoCotacao"),
           ),
+          invoiceValue: toNumericString(sumValorTotalProdutos),
 
           address: pickString(enderecoEntrega, "endereco"),
           addressZip: pickString(enderecoEntrega, "cep"),
@@ -603,27 +643,103 @@ async function main() {
           addressComplement: pickString(enderecoEntrega, "referencia"),
 
           estimatedDeliveryDate: maxPrazoEntregaPedido,
+          numDeliveryDays,
           deliveryDate: maxDataEntrega,
           deltaQuoteDeliveryDate: toNumericString(maxDelta),
 
           raw: obj as unknown,
-        });
+        };
 
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          await orderRepo.save(entity);
-          inserted += 1;
-        } catch (err) {
-          if (isMissingTable(err)) {
-            throw new Error(
-              'Tabela "freight_orders" não existe. Rode o SQL em `script-bi/sql/create_freight_quotes_tables.sql` (ou habilite TYPEORM_SYNC=true em dev) e reinicie o scheduler.',
-            );
+        let orderId: number;
+
+        if (isExisting && args.force && existingId != null) {
+          // --force: atualizar pedido existente e reimportar itens
+          await orderRepo.update(existingId, orderPayload as Record<string, unknown>);
+          await orderItemRepo.delete({ order: { id: existingId } });
+          orderId = existingId;
+          updated += 1;
+        } else {
+          const entity = orderRepo.create({
+            ...orderPayload,
+            company: companyRef,
+            platform: platformRef,
+            externalId,
+          });
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await orderRepo.save(entity);
+            inserted += 1;
+          } catch (err) {
+            if (isMissingTable(err)) {
+              throw new Error(
+                'Tabela "freight_orders" não existe. Rode o SQL em `script-bi/sql/create_freight_quotes_tables.sql` (ou habilite TYPEORM_SYNC=true em dev) e reinicie o scheduler.',
+              );
+            }
+            if (isUniqueViolation(err)) {
+              skippedDuplicateOnInsert += 1;
+              continue;
+            }
+            throw err;
           }
-          if (isUniqueViolation(err)) {
-            skippedDuplicateOnInsert += 1;
-            continue;
+          orderId = entity.id;
+        }
+
+        // itens do pedido: envio[].produtos[]
+        let lineIndex = 0;
+        for (let ei = 0; ei < envios.length; ei += 1) {
+          const eObj = asRecord(envios[ei]);
+          if (!eObj) continue;
+          const produtos = ensureArray(eObj.produtos);
+          for (let pi = 0; pi < produtos.length; pi += 1) {
+            const pObj = asRecord(produtos[pi]);
+            if (!pObj) continue;
+
+            const partnerSku = pickString(pObj, "sku") ?? pickString(pObj, "skuLoja");
+            const partnerSkuIdStr = pickNumericString(pObj, "idSku");
+
+            let maybeProduct: Product | null = null;
+            const skuPrefix = parseProductSkuFromPartnerSku(partnerSku);
+            const productSkuToMatch = skuPrefix ?? partnerSkuIdStr;
+            if (productSkuToMatch) {
+              // eslint-disable-next-line no-await-in-loop
+              maybeProduct = await findProductBySku(productSkuToMatch);
+            }
+            if (!maybeProduct && partnerSku && isNumericString(partnerSku)) {
+              // eslint-disable-next-line no-await-in-loop
+              maybeProduct = await findProductByReference(partnerSku);
+            }
+
+            const itemEntity = orderItemRepo.create({
+              company: companyRef,
+              order: { id: orderId } as FreightOrder,
+              product: maybeProduct ?? null,
+              lineIndex,
+              envioIndex: ei,
+              partnerSku,
+              partnerSkuId: partnerSkuIdStr,
+              title: pickString(pObj, "titulo"),
+              quantity: pickNumber(pObj, "quantidade"),
+              price: toNumericString(pickNumber(pObj, "preco") ?? pickString(pObj, "preco")),
+              volumes: pickNumber(pObj, "quantidadeVolumes"),
+              weight: toNumericString(pickNumber(pObj, "peso") ?? pickString(pObj, "peso")),
+              category: pickString(pObj, "categoria") ?? pickString(pObj, "categoriaCadastro"),
+              variation: pickString(pObj, "variacao"),
+              raw: pObj as unknown,
+            });
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              await orderItemRepo.save(itemEntity);
+            } catch (itemErr) {
+              if (isMissingTable(itemErr)) {
+                throw new Error(
+                  'Tabela "freight_order_items" não existe. Rode o SQL em `script-bi/sql/create_freight_order_items_table.sql` (ou habilite TYPEORM_SYNC=true em dev).',
+                );
+              }
+              if (isUniqueViolation(itemErr)) continue;
+              throw itemErr;
+            }
+            lineIndex += 1;
           }
-          throw err;
         }
       }
 
@@ -634,6 +750,7 @@ async function main() {
     pageForLog = page;
     fetchedForLog = fetched;
     insertedForLog = inserted;
+    updatedForLog = updated;
     skippedExistingForLog = skippedExisting;
     skippedDuplicateForLog = skippedDuplicateOnInsert;
     invalidRowsForLog = invalidRows;
@@ -651,6 +768,7 @@ async function main() {
       pages_fetched: page - 1,
       fetched,
       inserted,
+      updated,
       skipped_existing: skippedExisting,
       skipped_duplicate_on_insert: skippedDuplicateOnInsert,
       invalid_rows: invalidRows,
@@ -675,7 +793,7 @@ async function main() {
     }
 
     console.log(
-      `[allpost:freight-orders] company=${args.company} dataTipo=${args.dataTipo} periodo=${periodo} pages_fetched=${page - 1} fetched=${fetched} inserted=${inserted} skipped_existing=${skippedExisting} skipped_duplicate_on_insert=${skippedDuplicateOnInsert} invalid_rows=${invalidRows}`,
+      `[allpost:freight-orders] company=${args.company} dataTipo=${args.dataTipo} periodo=${periodo} pages_fetched=${page - 1} fetched=${fetched} inserted=${inserted} updated=${updated} skipped_existing=${skippedExisting} skipped_duplicate_on_insert=${skippedDuplicateOnInsert} invalid_rows=${invalidRows}`,
     );
   } catch (err) {
     // tenta gravar log de erro (best effort)
@@ -692,6 +810,7 @@ async function main() {
         pages_fetched: Math.max(0, pageForLog - 1),
         fetched: fetchedForLog,
         inserted: insertedForLog,
+        updated: updatedForLog,
         skipped_existing: skippedExistingForLog,
         skipped_duplicate_on_insert: skippedDuplicateForLog,
         invalid_rows: invalidRowsForLog,

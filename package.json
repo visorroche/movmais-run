@@ -20,6 +20,12 @@
     "script:allpost:quotes": "npm run build && node dist/commands/allpost/allpostFreightQuotes.js",
     "script:allpost:backfill-freight-quote-options": "npm run build && node dist/commands/allpost/backfillFreightQuoteOptions.js",
     "script:allpost:orders": "npm run build && node dist/commands/allpost/allpostFreightOrders.js",
+    "script:allpost:backfill-freight-quote-date-time": "npm run build && node dist/commands/allpost/backfillFreightQuoteDateTime.js",
+    "script:allpost:backfill-freight-order-date-time": "npm run build && node dist/commands/allpost/backfillFreightOrderDateTime.js",
+    "script:allpost:backfill-freight-quote-best-option": "npm run build && node dist/commands/allpost/backfillFreightQuoteBestOption.js",
+    "script:resume:freight": "npm run build && node dist/commands/resume/freight.js",
+    "script:sync-schema": "npm run build && node dist/commands/syncSchema.js",
+    "schema:log": "npm run build && node dist/commands/schemaLog.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

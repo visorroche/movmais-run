@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique, Index } from "typeorm";
 import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
 
 @Entity({ name: "freight_quotes" })
+@Index("idx_freight_quotes_company_date", ["company", "date"])
 @Unique("UQ_freight_quotes_company_id_platform_id_quote_id", ["company", "platform", "quoteId"])
 export class FreightQuote {
   @PrimaryGeneratedColumn()
@@ -23,6 +24,14 @@ export class FreightQuote {
   // AllPost: retorno.dataCotacao
   @Column({ type: "timestamptz", nullable: true })
   quotedAt?: Date | null;
+
+  /** Data no fuso Brasil, formato YYYY-MM-DD (ex.: 2026-01-01). Derivada de quotedAt. */
+  @Column({ type: "varchar", length: 10, nullable: true })
+  date?: string | null;
+
+  /** Horário no fuso Brasil, formato HH:mm:ss (ex.: 12:59:59). Derivado de quotedAt. */
+  @Column({ type: "varchar", length: 8, nullable: true })
+  time?: string | null;
 
   // destination (retorno.destino)
   @Column({ type: "varchar", nullable: true })
@@ -58,6 +67,14 @@ export class FreightQuote {
 
   @Column({ type: "integer", nullable: true })
   totalPackages?: number | null;
+
+  /** Melhor prazo (carrierDeadline) entre as opções, sempre da mesma opção que bestFreightCost. */
+  @Column({ type: "integer", nullable: true })
+  bestDeadline?: number | null;
+
+  /** Melhor preço de frete (shippingValue) entre as opções, sempre da mesma opção que bestDeadline. */
+  @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
+  bestFreightCost?: string | null;
 
   // response metadata
   @Column({ type: "integer", nullable: true })
