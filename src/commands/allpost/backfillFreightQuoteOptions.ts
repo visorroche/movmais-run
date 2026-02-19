@@ -171,7 +171,7 @@ async function main() {
         } catch (err) {
           if (isMissingTable(err)) {
             throw new Error(
-              'Tabela "freight_quote_options" não existe. Rode o SQL em `sql/create_freight_quotes_tables.sql` (ou habilite TYPEORM_SYNC=true em dev).',
+              'Tabela "freight_quote_options" não existe. Habilite TYPEORM_SYNC=true em dev ou crie a tabela.',
             );
           }
           throw err;

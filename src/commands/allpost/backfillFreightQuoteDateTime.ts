@@ -2,12 +2,11 @@ import "dotenv/config";
 import "reflect-metadata";
 
 import { AppDataSource } from "../../utils/data-source.js";
-import { FreightQuote } from "../../entities/FreightQuote.js";
-import { toBrazilDateAndTime } from "../../utils/brazil-date-time.js";
+
+const BRAZIL_TZ = "America/Sao_Paulo";
 
 type Args = {
   company?: number;
-  batch: number;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -26,12 +25,7 @@ function parseArgs(argv: string[]): Args {
     throw new Error("Parâmetro inválido: --company=ID (inteiro positivo).");
   }
 
-  const batch = Number(raw.get("batch") ?? 500);
-  if (!Number.isInteger(batch) || batch <= 0 || batch > 5000) {
-    throw new Error("Parâmetro inválido: --batch=N (1..5000).");
-  }
-
-  return { ...(company !== undefined ? { company } : {}), batch };
+  return { ...(company !== undefined ? { company } : {}) };
 }
 
 async function main() {
@@ -39,43 +33,77 @@ async function main() {
   await AppDataSource.initialize();
 
   try {
-    const repo = AppDataSource.getRepository(FreightQuote);
+    const runner = AppDataSource.createQueryRunner();
+    await runner.connect();
 
-    let lastId = 0;
-    let totalUpdated = 0;
+    try {
+      // Garante sessão read-write (evita erro "cannot execute UPDATE in a read-only transaction")
+      await runner.query("SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE");
+      // Timeout por query: 1h (UPDATE de um dia inteiro pode levar vários minutos)
+      await runner.query("SET statement_timeout = '1h'");
 
-    while (true) {
-      const qb = repo
-        .createQueryBuilder("fq")
-        .select(["fq.id", "fq.quotedAt"])
-        .where("fq.id > :lastId", { lastId })
-        .andWhere("fq.quoted_at IS NOT NULL")
-        .andWhere("(fq.date IS NULL OR fq.time IS NULL)")
-        .orderBy("fq.id", "ASC")
-        .take(args.batch);
-
+      // 1) Listar dias distintos que precisam de backfill (quoted_at em Brasil, com date/time nulos)
+      let datesQuery = `
+        SELECT DISTINCT (quoted_at AT TIME ZONE $1)::date AS d
+        FROM freight_quotes
+        WHERE quoted_at IS NOT NULL
+          AND (date IS NULL OR time IS NULL)
+      `;
+      const datesParams: unknown[] = [BRAZIL_TZ];
       if (args.company) {
-        qb.andWhere("fq.company_id = :companyId", { companyId: args.company });
+        datesParams.push(args.company);
+        datesQuery += ` AND company_id = $${datesParams.length}`;
       }
+      datesQuery += ` ORDER BY d`;
 
-      const list = await qb.getMany();
-      if (list.length === 0) break;
-
-      for (const row of list) {
-        lastId = row.id;
-        const { date, time } = toBrazilDateAndTime(row.quotedAt ?? null);
-        await repo.update(row.id, { date: date ?? null, time: time ?? null });
-        totalUpdated += 1;
+      const datesResult = await runner.query(datesQuery, datesParams);
+      const rows = Array.isArray(datesResult) ? datesResult : (datesResult as { rows?: { d: string }[] }).rows ?? [];
+      const dates = rows.map((r: { d: string }) => r.d);
+      if (dates.length === 0) {
+        console.log("[backfill-freight-quote-date-time] Nenhum registro pendente.");
+        return;
       }
 
       console.log(
-        `[backfill-freight-quote-date-time] last_id=${lastId} total_updated=${totalUpdated}`,
+        `[backfill-freight-quote-date-time] ${dates.length} dia(s) com registros pendentes (company=${args.company ?? "ALL"})`,
       );
-    }
 
-    console.log(
-      `[backfill-freight-quote-date-time] done company=${args.company ?? "ALL"} total_updated=${totalUpdated}`,
-    );
+      const updateQuery = args.company
+        ? `
+          UPDATE freight_quotes
+          SET
+            date = to_char(quoted_at AT TIME ZONE $1, 'YYYY-MM-DD'),
+            time = to_char(quoted_at AT TIME ZONE $1, 'HH24:MI:SS')
+          WHERE quoted_at IS NOT NULL
+            AND (date IS NULL OR time IS NULL)
+            AND (quoted_at AT TIME ZONE $1)::date = $2::date
+            AND company_id = $3
+        `
+        : `
+          UPDATE freight_quotes
+          SET
+            date = to_char(quoted_at AT TIME ZONE $1, 'YYYY-MM-DD'),
+            time = to_char(quoted_at AT TIME ZONE $1, 'HH24:MI:SS')
+          WHERE quoted_at IS NOT NULL
+            AND (date IS NULL OR time IS NULL)
+            AND (quoted_at AT TIME ZONE $1)::date = $2::date
+        `;
+
+      let totalUpdated = 0;
+      for (const day of dates) {
+        const updateParams: unknown[] = args.company ? [BRAZIL_TZ, day, args.company] : [BRAZIL_TZ, day];
+        const res = await runner.query(updateQuery, updateParams);
+        const n = Array.isArray(res) && typeof res[1] === "number" ? res[1] : (res as { rowCount?: number }).rowCount ?? 0;
+        totalUpdated += n;
+        console.log(`[backfill-freight-quote-date-time] day=${day} updated=${n} total=${totalUpdated}`);
+      }
+
+      console.log(
+        `[backfill-freight-quote-date-time] done company=${args.company ?? "ALL"} total_updated=${totalUpdated}`,
+      );
+    } finally {
+      await runner.release();
+    }
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }

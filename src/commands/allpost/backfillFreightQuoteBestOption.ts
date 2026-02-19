@@ -27,9 +27,9 @@ function parseArgs(argv: string[]): Args {
     throw new Error("Parâmetro inválido: --company=ID (inteiro positivo).");
   }
 
-  const batch = Number(raw.get("batch") ?? 500);
-  if (!Number.isInteger(batch) || batch <= 0 || batch > 5000) {
-    throw new Error("Parâmetro inválido: --batch=N (1..5000).");
+  const batch = Number(raw.get("batch") ?? 2000);
+  if (!Number.isInteger(batch) || batch <= 0 || batch > 10000) {
+    throw new Error("Parâmetro inválido: --batch=N (1..10000).");
   }
 
   return { ...(company !== undefined ? { company } : {}), batch };
@@ -84,18 +84,21 @@ async function main() {
     const quoteRepo = AppDataSource.getRepository(FreightQuote);
     const optionRepo = AppDataSource.getRepository(FreightQuoteOption);
 
-    let lastId = 0;
+    // Ordem decrescente: mais recentes primeiro (fev, jan, ...) — id maior = mais recente
+    let lastId: number | null = null;
     let totalUpdated = 0;
 
     while (true) {
       const qb = quoteRepo
         .createQueryBuilder("fq")
         .select(["fq.id"])
-        .where("fq.id > :lastId", { lastId })
         .andWhere("(fq.bestDeadline IS NULL OR fq.bestFreightCost IS NULL)")
-        .orderBy("fq.id", "ASC")
+        .orderBy("fq.id", "DESC")
         .take(args.batch);
 
+      if (lastId != null) {
+        qb.andWhere("fq.id < :lastId", { lastId });
+      }
       if (args.company) {
         qb.andWhere("fq.company_id = :companyId", { companyId: args.company });
       }
@@ -124,6 +127,9 @@ async function main() {
         });
       }
 
+      const idList: number[] = [];
+      const deadlineList: (number | null)[] = [];
+      const costList: (string | null)[] = [];
       for (const quote of quotes) {
         const opts = optionsByQuoteId.get(quote.id) ?? [];
         const rows: BestOptionRow[] = [];
@@ -136,11 +142,24 @@ async function main() {
           }
         }
         const { bestDeadline, bestFreightCost } = selectBestOption(rows);
-        await quoteRepo.update(quote.id, {
-          bestDeadline: bestDeadline ?? null,
-          bestFreightCost: bestFreightCost ?? null,
-        });
-        totalUpdated += 1;
+        idList.push(quote.id);
+        deadlineList.push(bestDeadline ?? null);
+        costList.push(bestFreightCost ?? null);
+      }
+
+      if (idList.length > 0) {
+        await AppDataSource.query(
+          `
+          UPDATE freight_quotes AS fq
+          SET best_deadline = v.best_deadline, best_freight_cost = v.best_freight_cost::numeric
+          FROM (
+            SELECT * FROM unnest($1::bigint[], $2::int[], $3::text[]) AS t(id, best_deadline, best_freight_cost)
+          ) AS v
+          WHERE fq.id = v.id
+          `,
+          [idList, deadlineList, costList],
+        );
+        totalUpdated += idList.length;
       }
 
       console.log(

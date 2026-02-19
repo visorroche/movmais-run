@@ -564,7 +564,7 @@ async function main() {
         } catch (err) {
           if (isMissingTable(err)) {
             throw new Error(
-              'Tabela "freight_orders" não existe. Rode o SQL em `script-bi/sql/create_freight_quotes_tables.sql` (ou habilite TYPEORM_SYNC=true em dev) e reinicie o scheduler.',
+              'Tabela "freight_orders" não existe. Habilite TYPEORM_SYNC=true em dev ou crie a tabela e reinicie o scheduler.',
             );
           }
           throw err;
@@ -672,7 +672,7 @@ async function main() {
           } catch (err) {
             if (isMissingTable(err)) {
               throw new Error(
-                'Tabela "freight_orders" não existe. Rode o SQL em `script-bi/sql/create_freight_quotes_tables.sql` (ou habilite TYPEORM_SYNC=true em dev) e reinicie o scheduler.',
+                'Tabela "freight_orders" não existe. Habilite TYPEORM_SYNC=true em dev ou crie a tabela e reinicie o scheduler.',
               );
             }
             if (isUniqueViolation(err)) {
@@ -732,7 +732,7 @@ async function main() {
             } catch (itemErr) {
               if (isMissingTable(itemErr)) {
                 throw new Error(
-                  'Tabela "freight_order_items" não existe. Rode o SQL em `script-bi/sql/create_freight_order_items_table.sql` (ou habilite TYPEORM_SYNC=true em dev).',
+                  'Tabela "freight_order_items" não existe. Habilite TYPEORM_SYNC=true em dev ou crie a tabela.',
                 );
               }
               if (isUniqueViolation(itemErr)) continue;
