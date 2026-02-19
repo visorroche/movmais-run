@@ -7,6 +7,7 @@ import { CompanyPlataform } from "../entities/CompanyPlataform.js";
 import { User } from "../entities/User.js";
 import { CompanyUser } from "../entities/CompanyUser.js";
 import { Customer } from "../entities/Customer.js";
+import { CustomersGroup } from "../entities/CustomersGroup.js";
 import { Order } from "../entities/Order.js";
 import { OrderItem } from "../entities/OrderItem.js";
 import { Product } from "../entities/Product.js";
@@ -18,6 +19,7 @@ import { FreightOrder } from "../entities/FreightOrder.js";
 import { FreightOrderItem } from "../entities/FreightOrderItem.js";
 import { FreightResume } from "../entities/FreightResume.js";
 import { IntegrationLog } from "../entities/IntegrationLog.js";
+import { Log } from "../entities/Log.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
 export const AppDataSource = new DataSource({
@@ -51,6 +53,7 @@ export const AppDataSource = new DataSource({
     User,
     CompanyUser,
     Customer,
+    CustomersGroup,
     Order,
     Product,
     OrderItem,
@@ -62,6 +65,7 @@ export const AppDataSource = new DataSource({
     FreightOrderItem,
     FreightResume,
     IntegrationLog,
+    Log,
   ],
   migrations: [],
   subscribers: [],

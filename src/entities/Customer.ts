@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Unique } from "typeorm";
 import { Company } from "./Company.js";
+import { CustomersGroup } from "./CustomersGroup.js";
 import { Order } from "./Order.js";
 import { Representative } from "./Representative.js";
 
@@ -58,6 +59,10 @@ export class Customer {
   @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "representative_id" })
   representative?: Representative | null;
+
+  @ManyToOne(() => CustomersGroup, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "customer_group_id" })
+  customerGroup?: CustomersGroup | null;
 
   @OneToMany(() => Order, (order: Order) => order.customer)
   orders?: Order[];
