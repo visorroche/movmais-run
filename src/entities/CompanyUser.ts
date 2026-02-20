@@ -10,6 +10,11 @@ export class CompanyUser {
   @Column({ type: "boolean", default: false })
   owner!: boolean;
 
+  // Define quais áreas do sistema o usuário (type="user") pode acessar dentro desta company.
+  // Quando o user é type="admin", esse campo é ignorado.
+  @Column({ type: "jsonb", default: () => `'["all"]'::jsonb` })
+  polices!: string[];
+
   @Column({ type: "int", nullable: true })
   company_id?: number | null;
 
