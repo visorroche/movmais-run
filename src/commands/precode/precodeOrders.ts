@@ -11,6 +11,10 @@ import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapPrecodeStatus } from "../../utils/status/index.js";
+import { toBrazilianState } from "../../utils/brazilian-states.js";
+import { toPersonType } from "../../utils/person-type.js";
+import { toGender } from "../../utils/gender.js";
+import { toActiveStatus } from "../../utils/active-status.js";
 
 type Args = {
   company: number;
@@ -360,14 +364,15 @@ async function main() {
         customer.company = companyRef;
         customer.externalId = cpfCnpj;
         customer.taxId = cpfCnpj;
-        customer.stateRegistration = pickString(dadosCliente, "inscEstadualRg");
-        customer.personType = pickString(dadosCliente, "tipo");
+        const dadosEntregaCliente = (dadosCliente.dadosEntrega ?? {}) as Record<string, unknown>;
+        customer.state = toBrazilianState(pickString(dadosEntregaCliente, "uf")) ?? null;
+        customer.personType = toPersonType(pickString(dadosCliente, "tipo")) ?? null;
         customer.legalName = pickString(dadosCliente, "nomeRazao");
         customer.tradeName = pickString(dadosCliente, "fantasia");
-        customer.gender = pickString(dadosCliente, "sexo");
+        customer.gender = toGender(pickString(dadosCliente, "sexo")) ?? null;
         customer.birthDate = pickString(dadosCliente, "dataNascimento");
         customer.email = pickString(dadosCliente, "email");
-        customer.status = pickString(dadosCliente, "statusCliente");
+        customer.status = toActiveStatus(pickString(dadosCliente, "statusCliente")) ?? null;
         customer.phones = (dadosCliente.telefones ?? null) as unknown;
         // raw: manter o payload do parceiro "como veio" para o customer (logs/auditoria)
         customer.raw = dadosCliente as unknown;

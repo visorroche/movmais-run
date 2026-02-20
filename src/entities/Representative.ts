@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
 import { Company } from "./Company.js";
 import { User } from "./User.js";
+import type { BrazilianState } from "../utils/brazilian-states.js";
 
 @Entity({ name: "representatives" })
 @Unique("UQ_representatives_company_id_external_id", ["company", "externalId"])
@@ -30,7 +31,7 @@ export class Representative {
   supervisorRef?: Representative | null;
 
   @Column({ type: "varchar", nullable: true })
-  state?: string | null;
+  state?: BrazilianState | null;
 
   @Column({ type: "varchar", nullable: true })
   city?: string | null;
@@ -43,6 +44,30 @@ export class Representative {
 
   @Column({ type: "varchar", nullable: true })
   phone?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  zip?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  address?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  number?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  complement?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  neighborhood?: string | null;
+
+  @Column({ type: "date", nullable: true, name: "created_at" })
+  createdAt?: string | null;
+
+  @Column({ type: "varchar", nullable: true, name: "tax_id" })
+  taxId?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  category?: string | null;
 
   @Column({ type: "text", nullable: true })
   obs?: string | null;

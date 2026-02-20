@@ -3,6 +3,10 @@ import { Company } from "./Company.js";
 import { CustomersGroup } from "./CustomersGroup.js";
 import { Order } from "./Order.js";
 import { Representative } from "./Representative.js";
+import type { BrazilianState } from "../utils/brazilian-states.js";
+import type { PersonType } from "../utils/person-type.js";
+import type { Gender } from "../utils/gender.js";
+import type { ActiveStatus } from "../utils/active-status.js";
 
 @Entity({ name: "customers" })
 @Unique("UQ_customers_company_id_external_id", ["company", "externalId"])
@@ -21,11 +25,11 @@ export class Customer {
   @Column({ type: "varchar" })
   taxId!: string; // cpfCnpj
 
-  @Column({ type: "varchar", nullable: true })
-  stateRegistration?: string | null; // inscEstadualRg
+  @Column({ type: "varchar", nullable: true, name: "state" })
+  state?: BrazilianState | null; // UF
 
   @Column({ type: "varchar", nullable: true })
-  personType?: string | null; // tipo
+  personType?: PersonType | null; // PF | PJ
 
   @Column({ type: "varchar", nullable: true })
   legalName?: string | null; // nomeRazao
@@ -34,7 +38,7 @@ export class Customer {
   tradeName?: string | null; // fantasia
 
   @Column({ type: "varchar", nullable: true })
-  gender?: string | null; // sexo
+  gender?: Gender | null; // F | M | B
 
   @Column({ type: "date", nullable: true })
   birthDate?: string | null; // dataNascimento
@@ -43,7 +47,7 @@ export class Customer {
   email?: string | null;
 
   @Column({ type: "varchar", nullable: true })
-  status?: string | null; // statusCliente
+  status?: ActiveStatus | null; // ACTIVE | INACTIVE
 
   @Column({ type: "jsonb", nullable: true })
   deliveryAddress?: unknown; // dadosEntrega

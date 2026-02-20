@@ -4,6 +4,7 @@ import { OrderItem } from "./OrderItem.js";
 import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
 import { Representative } from "./Representative.js";
+import type { OrderStatus } from "../utils/status/index.js";
 
 @Entity({ name: "orders" })
 @Unique("UQ_orders_company_id_order_code", ["company", "orderCode"])
@@ -23,7 +24,7 @@ export class Order {
   partnerOrderId?: string | null; // pedidoParceiro
 
   @Column({ type: "varchar", nullable: true })
-  currentStatus?: string | null; // status padronizado (nossos status)
+  currentStatus?: OrderStatus | null; // status padronizado (ORDER_STATUSES)
 
   @Column({ type: "varchar", nullable: true })
   currentStatusCode?: string | null; // codigoStatusAtual

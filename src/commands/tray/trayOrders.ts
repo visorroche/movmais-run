@@ -12,6 +12,9 @@ import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapTrayStatus, parseTrayCustomStatusMap } from "../../utils/status/index.js";
+import { toBrazilianState } from "../../utils/brazilian-states.js";
+import { toPersonType } from "../../utils/person-type.js";
+import { toGender } from "../../utils/gender.js";
 
 const IS_TTY = Boolean(process.stdout.isTTY);
 
@@ -893,9 +896,9 @@ async function main() {
                 customer.legalName = pickString(customerObj, "name");
                 customer.email = pickString(customerObj, "email");
                 customer.birthDate = normalizeDateString(pickString(customerObj, "birth_date"));
-                customer.gender = pickString(customerObj, "gender");
-                customer.personType = pickString(customerObj, "type");
-                customer.stateRegistration = pickString(customerObj, "state_inscription") ?? pickString(customerObj, "rg");
+                customer.gender = toGender(pickString(customerObj, "gender")) ?? null;
+                customer.personType = toPersonType(pickString(customerObj, "type")) ?? null;
+                customer.state = toBrazilianState(pickString(customerObj, "state")) ?? null;
                 customer.tradeName = pickString(customerObj, "company_name");
 
                 customer.phones = {

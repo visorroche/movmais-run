@@ -1,13 +1,20 @@
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from "typeorm";
 import { CompanyPlataform } from "./CompanyPlataform.js";
 
-export type PlataformType = "ecommerce" | "logistic";
+export type PlataformType = "ecommerce" | "logistic" | "b2b";
+
+/** Entidade de referência para parâmetros do tipo "schema" (mapeamento tabela/colunas do banco do cliente). */
+export type PlataformSchemaEntity = "products" | "customers" | "orders" | "representatives";
 
 export type PlataformParameter = {
   label: string;
   name: string;
   description?: string;
   required: boolean;
+  /** text | password | hidden | schema. Quando "schema", use schemaEntity. */
+  type?: "text" | "password" | "hidden" | "schema";
+  /** Obrigatório quando type === "schema": entidade de referência (products, customers, orders, representatives). */
+  schemaEntity?: PlataformSchemaEntity;
 };
 
 @Entity({ name: "platforms" })

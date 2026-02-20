@@ -12,7 +12,8 @@ import { Order } from "../../entities/Order.js";
 import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
-import { mapAnymarketStatus } from "../../utils/status/index.js";
+import { mapAnymarketStatus, isOrderStatus } from "../../utils/status/index.js";
+import { toPersonType } from "../../utils/person-type.js";
 
 const IS_TTY = Boolean(process.stdout.isTTY);
 
@@ -443,7 +444,7 @@ async function processOrdersPass(opts: {
         customer.legalName = pickString(buyer, "name");
         customer.email = pickString(buyer, "email");
         customer.birthDate = datePartFromIso(pickString(buyer, "dateOfBirth"));
-        customer.personType = pickString(buyer, "documentType");
+        customer.personType = toPersonType(pickString(buyer, "documentType")) ?? null;
         customer.phones = { cellphone: pickString(buyer, "cellPhone"), phone: null };
         customer.raw = buyer;
         customersToSave.push(customer);
@@ -473,7 +474,7 @@ async function processOrdersPass(opts: {
       order.platform = platform;
       order.orderCode = orderCode;
       order.partnerOrderId = pickString(o, "marketPlaceId") ?? pickString(o, "marketPlaceNumber") ?? pickString(o, "marketPlaceId");
-      order.currentStatus = currentStatus;
+      order.currentStatus = isOrderStatus(currentStatus) ? currentStatus : null;
       order.currentStatusCode = currentStatusCode;
       order.marketplaceName = pickString(o, "accountName") ?? pickString(o, "marketPlace");
       order.channel = "marketplace";
