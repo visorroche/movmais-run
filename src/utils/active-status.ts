@@ -32,3 +32,11 @@ export function toActiveStatus(value: unknown): ActiveStatus | null {
   if (s === "ACTIVE" || s === "INACTIVE") return s;
   return NORMALIZE_MAP[s] ?? NORMALIZE_MAP[String(value).trim()] ?? null;
 }
+
+/** Normaliza string/valor para boolean (true=ativo, false=inativo). */
+export function toActiveBoolean(value: unknown): boolean | null {
+  const s = toActiveStatus(value);
+  if (s === "ACTIVE") return true;
+  if (s === "INACTIVE") return false;
+  return null;
+}

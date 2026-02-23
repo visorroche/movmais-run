@@ -1,9 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique, Index } from "typeorm";
 import { Company } from "./Company.js";
 import { Product } from "./Product.js";
 import { FreightOrder } from "./FreightOrder.js";
 
 @Entity({ name: "freight_order_items" })
+@Index("idx_freight_order_items_product_id", ["product"])
 @Unique("UQ_freight_order_items_order_id_line_index", ["order", "lineIndex"])
 export class FreightOrderItem {
   @PrimaryGeneratedColumn()

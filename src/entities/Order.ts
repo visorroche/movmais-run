@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, Unique, Index } from "typeorm";
 import { Customer } from "./Customer.js";
 import { OrderItem } from "./OrderItem.js";
 import { Company } from "./Company.js";
@@ -7,10 +7,15 @@ import { Representative } from "./Representative.js";
 import type { OrderStatus } from "../utils/status/index.js";
 
 @Entity({ name: "orders" })
+@Index("idx_orders_customer_id", ["customer"])
 @Unique("UQ_orders_company_id_order_code", ["company", "orderCode"])
 export class Order {
   @PrimaryGeneratedColumn()
   id!: number;
+
+  /** ID externo do pedido no banco do cliente (quando existir). */
+  @Column({ type: "varchar", nullable: true, name: "external_id" })
+  externalId?: string | null;
 
   @Column({ type: "integer" })
   orderCode!: number; // codigoPedido
@@ -114,6 +119,14 @@ export class Order {
   @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "representative_id" })
   representative?: Representative | null;
+
+  @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "assistant_id" })
+  assistant?: Representative | null;
+
+  @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "supervisor_id" })
+  supervisor?: Representative | null;
 
   @OneToMany(() => OrderItem, (item: OrderItem) => item.order)
   items?: OrderItem[];

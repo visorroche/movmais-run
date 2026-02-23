@@ -466,7 +466,7 @@ async function main() {
             personType: "PF",
             birthDate: null,
             email: `${fullName.toLowerCase().replace(/\s+/g, ".").replace(/[^a-z.]/g, "")}.${customerSeq}@fake.local`,
-            status: "ACTIVE",
+            status: true,
             phones: { cellphone: `+5511${randInt(900000000, 999999999)}` },
             deliveryAddress: null,
             raw: { fake: true },

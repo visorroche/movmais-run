@@ -7,6 +7,10 @@ export class Product {
   @PrimaryGeneratedColumn()
   id!: number;
 
+  /** ID externo do produto no banco do cliente (quando existir). */
+  @Column({ type: "varchar", nullable: true, name: "external_id" })
+  externalId?: string | null;
+
   @ManyToOne(() => Company, { nullable: false })
   @JoinColumn({ name: "company_id" })
   company!: Company;
@@ -78,6 +82,10 @@ export class Product {
   // Quando TRUE, integrações não devem sobrescrever category/subcategory/finalCategory/brand/model
   @Column({ type: "boolean", name: "manual_attributes_locked", default: false })
   manualAttributesLocked!: boolean;
+
+  // true = ativo; false = inativo. Mantemos o produto para preservar vínculo com vendas antigas.
+  @Column({ type: "boolean", default: true })
+  active!: boolean;
 
   @Column({ type: "varchar", nullable: true })
   photo?: string | null;

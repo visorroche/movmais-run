@@ -19,6 +19,10 @@ type JobName =
   | "anymarket:orders"
   | "precode:orders"
   | "tray:orders"
+  | "databaseB2b:representatives"
+  | "databaseB2b:customers"
+  | "databaseB2b:products"
+  | "databaseB2b:orders"
   | "resume:freight";
 
 const JOB_LOCKS = new Map<JobName, boolean>();
@@ -159,6 +163,84 @@ function startHttpServer() {
         },
       },
     },
+    b2b_database: {
+      representatives: {
+        scriptRel: "commands/databaseB2b/representatives.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      customers: {
+        scriptRel: "commands/databaseB2b/customers.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      products: {
+        scriptRel: "commands/databaseB2b/products.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      orders: {
+        scriptRel: "commands/databaseB2b/orders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+    },
+    database_b2b: {
+      representatives: {
+        scriptRel: "commands/databaseB2b/representatives.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      customers: {
+        scriptRel: "commands/databaseB2b/customers.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      products: {
+        scriptRel: "commands/databaseB2b/products.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      orders: {
+        scriptRel: "commands/databaseB2b/orders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+    },
+    databaseb2b: {
+      representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      orders: {
+        scriptRel: "commands/databaseB2b/orders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+    },
+    databaseB2b: {
+      representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      orders: {
+        scriptRel: "commands/databaseB2b/orders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+    },
   };
 
   const server = http.createServer((req, res) => {
@@ -291,6 +373,25 @@ async function listCompanyIdsForPlatformSlug(slug: string): Promise<number[]> {
   return Array.from(new Set(ids)).sort((a, b) => a - b);
 }
 
+async function listCompanyIdsForPlatformSlugs(slugs: string[]): Promise<number[]> {
+  const clean = slugs.map((s) => String(s ?? "").trim()).filter(Boolean);
+  if (!clean.length) return [];
+  await ensureDb();
+  const cpRepo = AppDataSource.getRepository(CompanyPlataform);
+  const rows = await cpRepo
+    .createQueryBuilder("cp")
+    .innerJoin("cp.platform", "platform")
+    .innerJoin("cp.company", "company")
+    .where("platform.slug IN (:...slugs)", { slugs: clean })
+    .select("company.id", "id")
+    .getRawMany<{ id: number }>();
+
+  const ids = rows
+    .map((r) => Number(r.id))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
 function resolveDistScript(scriptRelFromDistRoot: string): string {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -362,6 +463,42 @@ async function runForCompanies(platformSlug: string, scriptRel: string, makeArgs
         console.error(`[scheduler] erro ao executar ${label}:`, err);
       }
       // Espaça um pouco para evitar rajadas (especialmente em produção)
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(250);
+    }
+  };
+
+  const workerCount = Math.min(concurrency, ids.length);
+  await Promise.all(Array.from({ length: workerCount }, (_, i) => worker(i + 1)));
+}
+
+async function runForCompaniesSlugs(platformSlugs: string[], scriptRel: string, makeArgs: (companyId: number) => string[]) {
+  const ids = await listCompanyIdsForPlatformSlugs(platformSlugs);
+  if (ids.length === 0) {
+    console.log(`[scheduler] platform=${platformSlugs.join(",")} sem companies instaladas; nada a fazer.`);
+    return;
+  }
+
+  const DEFAULT_CONCURRENCY = 5;
+  const concurrencyRaw = process.env.SCHEDULER_COMPANY_CONCURRENCY;
+  const concurrencyParsed = concurrencyRaw ? Number(concurrencyRaw) : DEFAULT_CONCURRENCY;
+  const concurrency = Number.isInteger(concurrencyParsed) && concurrencyParsed > 0 ? concurrencyParsed : DEFAULT_CONCURRENCY;
+
+  const scriptPath = resolveDistScript(scriptRel);
+
+  const queue = ids.slice();
+  const worker = async (workerIdx: number) => {
+    while (!shuttingDown) {
+      const companyId = queue.shift();
+      if (!companyId) return;
+      const label = `${platformSlugs.join(",")} company=${companyId} script=${scriptRel}`;
+      console.log(`[scheduler] executando ${label} (worker=${workerIdx}/${concurrency})`);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await runNodeScript(scriptPath, makeArgs(companyId), label);
+      } catch (err) {
+        console.error(`[scheduler] erro ao executar ${label}:`, err);
+      }
       // eslint-disable-next-line no-await-in-loop
       await sleep(250);
     }
@@ -463,9 +600,35 @@ async function main() {
       );
     });
 
+  // job: database B2B (a cada 1h)
+  // Observação: aceitamos variações de slug para compatibilidade.
+  const DBB2B_SLUGS = ["b2b_database", "database_b2b", "databaseb2b", "databaseB2b"];
+  const tickDatabaseB2bRepresentatives = () =>
+    runJob("databaseB2b:representatives", async () => {
+      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/representatives.js", (companyId) => [`--company=${companyId}`]);
+    });
+  const tickDatabaseB2bCustomers = () =>
+    runJob("databaseB2b:customers", async () => {
+      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/customers.js", (companyId) => [`--company=${companyId}`]);
+    });
+  const tickDatabaseB2bProducts = () =>
+    runJob("databaseB2b:products", async () => {
+      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/products.js", (companyId) => [`--company=${companyId}`]);
+    });
+  const tickDatabaseB2bOrders = () =>
+    runJob("databaseB2b:orders", async () => {
+      const end = formatYmdUtc(utcMidnight(new Date()));
+      const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
+      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/orders.js", (companyId) => [
+        `--company=${companyId}`,
+        `--start-date=${start}`,
+        `--end-date=${end}`,
+      ]);
+    });
+
   console.log("[scheduler] iniciado.");
   console.log(
-    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h (precode/tray/anymarket), resume:freight=24h",
+    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
   );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
@@ -477,7 +640,11 @@ async function main() {
   setTimeout(() => void tickTrayProducts(), 10_000);
   setTimeout(() => void tickAnymarketProducts(), 12_000);
   setTimeout(() => void tickAnymarketOrders(), 14_000);
-  setTimeout(() => void tickResumeFreight(), 20_000);
+  setTimeout(() => void tickDatabaseB2bRepresentatives(), 16_000);
+  setTimeout(() => void tickDatabaseB2bCustomers(), 18_000);
+  setTimeout(() => void tickDatabaseB2bProducts(), 20_000);
+  setTimeout(() => void tickDatabaseB2bOrders(), 22_000);
+  setTimeout(() => void tickResumeFreight(), 28_000);
 
   const timers: NodeJS.Timeout[] = [];
   timers.push(setInterval(() => void tickAllpost(), EVERY_30_MIN));
@@ -489,6 +656,10 @@ async function main() {
   timers.push(setInterval(() => void tickTrayProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickAnymarketProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickResumeFreight(), EVERY_24_HOURS));
+  timers.push(setInterval(() => void tickDatabaseB2bRepresentatives(), EVERY_1_HOUR));
+  timers.push(setInterval(() => void tickDatabaseB2bCustomers(), EVERY_1_HOUR));
+  timers.push(setInterval(() => void tickDatabaseB2bProducts(), EVERY_1_HOUR));
+  timers.push(setInterval(() => void tickDatabaseB2bOrders(), EVERY_1_HOUR));
 
   // loop “keep alive” para permitir shutdown gracioso
   while (!shuttingDown) {

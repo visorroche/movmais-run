@@ -16,6 +16,10 @@
     "script:tray:products": "npm run build && node dist/commands/tray/trayProducts.js",
     "script:anymarket:products": "npm run build && node dist/commands/anymarket/anymarketProducts.js",
     "script:anymarket:orders": "npm run build && node dist/commands/anymarket/anymarketOrders.js",
+    "script:databaseb2b:representatives": "npm run build && node dist/commands/databaseB2b/representatives.js",
+    "script:databaseb2b:customers": "npm run build && node dist/commands/databaseB2b/customers.js",
+    "script:databaseb2b:products": "npm run build && node dist/commands/databaseB2b/products.js",
+    "script:databaseb2b:orders": "npm run build && node dist/commands/databaseB2b/orders.js",
     "script:fake:company-data": "npm run build && node dist/commands/fake/fakeCompanyData.js",
     "script:allpost:quotes": "npm run build && node dist/commands/allpost/allpostFreightQuotes.js",
     "script:allpost:backfill-freight-quote-options": "npm run build && node dist/commands/allpost/backfillFreightQuoteOptions.js",
@@ -42,5 +46,8 @@
     "ts-node-dev": "^2.0.0",
     "typeorm": "^0.3.28",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.16.0"
   }
 }

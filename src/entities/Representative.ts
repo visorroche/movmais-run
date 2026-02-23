@@ -9,6 +9,10 @@ export class Representative {
   @PrimaryGeneratedColumn()
   id!: number;
 
+  /** Código interno do representante no ERP/CRM do cliente (quando existir). */
+  @Column({ type: "varchar", nullable: true, name: "internal_code" })
+  internalCode?: string | null;
+
   @ManyToOne(() => Company, { nullable: false, onDelete: "CASCADE" })
   @JoinColumn({ name: "company_id" })
   company!: Company;
@@ -62,9 +66,6 @@ export class Representative {
 
   @Column({ type: "date", nullable: true, name: "created_at" })
   createdAt?: string | null;
-
-  @Column({ type: "varchar", nullable: true, name: "tax_id" })
-  taxId?: string | null;
 
   @Column({ type: "varchar", nullable: true })
   category?: string | null;

@@ -14,7 +14,7 @@ import { mapPrecodeStatus } from "../../utils/status/index.js";
 import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
 import { toGender } from "../../utils/gender.js";
-import { toActiveStatus } from "../../utils/active-status.js";
+import { toActiveBoolean } from "../../utils/active-status.js";
 
 type Args = {
   company: number;
@@ -372,7 +372,7 @@ async function main() {
         customer.gender = toGender(pickString(dadosCliente, "sexo")) ?? null;
         customer.birthDate = pickString(dadosCliente, "dataNascimento");
         customer.email = pickString(dadosCliente, "email");
-        customer.status = toActiveStatus(pickString(dadosCliente, "statusCliente")) ?? null;
+        customer.status = toActiveBoolean(pickString(dadosCliente, "statusCliente")) ?? null;
         customer.phones = (dadosCliente.telefones ?? null) as unknown;
         // raw: manter o payload do parceiro "como veio" para o customer (logs/auditoria)
         customer.raw = dadosCliente as unknown;

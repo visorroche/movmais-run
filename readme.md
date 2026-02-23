@@ -12,16 +12,65 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 | Products | Precode | `precode:products` | **a cada 3 horas** | Roda na inicialização (após ~8s). |
 | Products | Tray | `tray:products` | **a cada 3 horas** | Roda na inicialização (após ~10s). |
 | Products | AnyMarket | `anymarket:products` | **a cada 3 horas** | Roda na inicialização (após ~12s). Config: `{"token":"..."}` |
+| Database B2B | Database | `databaseB2b:*` | **a cada 1 hora** | Roda na inicialização. Usa config em `company_platforms.config`. |
 
-Comandos para rodar manualmente
+## Comandos para rodar manualmente
+
+Obs.: para passar parâmetros (`--company`, `--start-date`, etc) via `npm run`, use `--` antes.
 
 ## Atualizando o banco de dados
 
 Verifica alterações:
-```npm run schema:log```
+
+```bash
+npm run schema:log
+```
 
 Aplica alterações:
-```npm run script:sync-schema```
+
+```bash
+npm run script:sync-schema
+```
+
+## Integrações (execução manual)
+
+### Precode
+
+```bash
+npm run script:precode:products -- --company=1
+npm run script:precode:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04
+```
+
+### Tray
+
+```bash
+npm run script:tray:products -- --company=1
+npm run script:tray:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04
+```
+
+### AnyMarket
+
+```bash
+npm run script:anymarket:products -- --company=1
+npm run script:anymarket:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04
+```
+
+### Database B2B
+
+Executa 1 comando por entidade e aplica os tratamentos configurados no mapeamento (ex.: `mapear_valores`, `limpeza_regex`, `concatenar_campos`, `usar_um_ou_outro`, `mapear_json`).
+
+```bash
+npm run script:databaseb2b:representatives -- --company=1
+npm run script:databaseb2b:customers -- --company=1
+npm run script:databaseb2b:products -- --company=1
+npm run script:databaseb2b:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04
+```
+
+Opcional (apenas inserir, não atualizar pedidos já existentes):
+
+```bash
+npm run script:databaseb2b:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04 --onlyInsert
+```
 
 ## Regras de Negócio Freight
 O campo invoice_value em FreightOrder e FreightQuote não soma o valor do frete são só os valores dos produtos

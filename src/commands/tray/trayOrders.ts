@@ -15,6 +15,7 @@ import { mapTrayStatus, parseTrayCustomStatusMap } from "../../utils/status/inde
 import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
 import { toGender } from "../../utils/gender.js";
+import { toActiveBoolean } from "../../utils/active-status.js";
 
 const IS_TTY = Boolean(process.stdout.isTTY);
 
@@ -900,6 +901,12 @@ async function main() {
                 customer.personType = toPersonType(pickString(customerObj, "type")) ?? null;
                 customer.state = toBrazilianState(pickString(customerObj, "state")) ?? null;
                 customer.tradeName = pickString(customerObj, "company_name");
+                // Tray pode trazer status textual (ACTIVE/INACTIVE, ATIVO/INATIVO...). Se vier, normalizamos para boolean.
+                customer.status =
+                  toActiveBoolean(pickString(customerObj, "status")) ??
+                  toActiveBoolean(pickString(customerObj, "active")) ??
+                  customer.status ??
+                  null;
 
                 customer.phones = {
                   phone: pickString(customerObj, "phone"),

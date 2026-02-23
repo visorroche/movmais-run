@@ -6,7 +6,6 @@ import { Representative } from "./Representative.js";
 import type { BrazilianState } from "../utils/brazilian-states.js";
 import type { PersonType } from "../utils/person-type.js";
 import type { Gender } from "../utils/gender.js";
-import type { ActiveStatus } from "../utils/active-status.js";
 
 @Entity({ name: "customers" })
 @Unique("UQ_customers_company_id_external_id", ["company", "externalId"])
@@ -24,6 +23,35 @@ export class Customer {
 
   @Column({ type: "varchar" })
   taxId!: string; // cpfCnpj
+
+  /** Código interno do cliente no ERP/CRM do cliente. */
+  @Column({ type: "varchar", nullable: true, name: "internal_cod" })
+  internalCod?: string | null;
+
+  /** Data de cadastro do cliente (quando fornecida pela integração). */
+  @Column({ type: "date", nullable: true, name: "created_at" })
+  createdAt?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  segmentation?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  address?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  zip?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  city?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  neighborhood?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  number?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  complement?: string | null;
 
   @Column({ type: "varchar", nullable: true, name: "state" })
   state?: BrazilianState | null; // UF
@@ -46,14 +74,17 @@ export class Customer {
   @Column({ type: "varchar", nullable: true })
   email?: string | null;
 
-  @Column({ type: "varchar", nullable: true })
-  status?: ActiveStatus | null; // ACTIVE | INACTIVE
+  @Column({ type: "boolean", nullable: true })
+  status?: boolean | null;
 
   @Column({ type: "jsonb", nullable: true })
   deliveryAddress?: unknown; // dadosEntrega
 
   @Column({ type: "jsonb", nullable: true })
   phones?: unknown; // telefones
+
+  @Column({ type: "text", nullable: true })
+  obs?: string | null;
 
   // payload "cru" do parceiro (somente para logs/auditoria)
   @Column({ type: "jsonb", nullable: true })
