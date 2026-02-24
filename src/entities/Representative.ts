@@ -27,6 +27,9 @@ export class Representative {
   @Column({ type: "varchar", default: "" })
   name!: string;
 
+  @Column({ type: "varchar", nullable: true })
+  avatar?: string | null;
+
   @Column({ type: "boolean", default: false })
   supervisor!: boolean;
 

@@ -43,6 +43,27 @@ function parseDateOnlyLoose(value: unknown): string | null {
 
 let __stage = "init";
 
+async function resetInternalDbConnection() {
+  try {
+    if (AppDataSource.isInitialized) await AppDataSource.destroy();
+  } catch {
+    // ignore
+  }
+  await AppDataSource.initialize();
+}
+
+function chunkArray<T>(arr: T[], size: number) {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+function isConnectionTerminatedError(err: unknown) {
+  const msg = String((err as any)?.message ?? "");
+  const drv = String((err as any)?.driverError?.message ?? "");
+  return msg.includes("Connection terminated unexpectedly") || drv.includes("Connection terminated unexpectedly");
+}
+
 async function main() {
   __stage = "parse_args";
   const raw = parseCliKv(process.argv.slice(2));
@@ -177,49 +198,130 @@ async function main() {
       __stage = "load_existing_customers_batch";
       const existingByExternalId = new Map<string, Customer>();
       if (batchExternalIds.length) {
-        const existing = await customerRepo
-          .createQueryBuilder("c")
-          .where("c.company_id = :companyId", { companyId: company.id })
-          .andWhere("c.external_id IN (:...ids)", { ids: batchExternalIds })
-          .getMany();
-        for (const c of existing) {
-          const key = String(c.externalId ?? "").trim();
-          if (key) existingByExternalId.set(key, c);
+        for (const ids of chunkArray(batchExternalIds, 200)) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const existing = await customerRepo
+              .createQueryBuilder("c")
+              .where("c.company_id = :companyId", { companyId: company.id })
+              .andWhere("c.external_id IN (:...ids)", { ids })
+              .getMany();
+            for (const c of existing) {
+              const key = String(c.externalId ?? "").trim();
+              if (key) existingByExternalId.set(key, c);
+            }
+          } catch (err) {
+            if (isConnectionTerminatedError(err)) {
+              console.warn("[databaseB2b:customers] conexão interna caiu; reiniciando e tentando novamente (existingByExternalId)...");
+              // eslint-disable-next-line no-await-in-loop
+              await resetInternalDbConnection();
+              const customerRepoRetry = AppDataSource.getRepository(Customer);
+              // eslint-disable-next-line no-await-in-loop
+              const existing = await customerRepoRetry
+                .createQueryBuilder("c")
+                .where("c.company_id = :companyId", { companyId: company.id })
+                .andWhere("c.external_id IN (:...ids)", { ids })
+                .getMany();
+              for (const c of existing) {
+                const key = String(c.externalId ?? "").trim();
+                if (key) existingByExternalId.set(key, c);
+              }
+              continue;
+            }
+            throw err;
+          }
         }
       }
 
       const legacyByTaxId = new Map<string, Customer>();
       if (batchTaxIds.length) {
-        const legacy = await customerRepo
-          .createQueryBuilder("c")
-          .where("c.company_id = :companyId", { companyId: company.id })
-          .andWhere("c.external_id IN (:...ids)", { ids: batchTaxIds })
-          .getMany();
-        for (const c of legacy) {
-          const key = String(c.externalId ?? "").trim();
-          if (key) legacyByTaxId.set(key, c);
+        for (const ids of chunkArray(batchTaxIds, 200)) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const legacy = await customerRepo
+              .createQueryBuilder("c")
+              .where("c.company_id = :companyId", { companyId: company.id })
+              .andWhere("c.external_id IN (:...ids)", { ids })
+              .getMany();
+            for (const c of legacy) {
+              const key = String(c.externalId ?? "").trim();
+              if (key) legacyByTaxId.set(key, c);
+            }
+          } catch (err) {
+            if (isConnectionTerminatedError(err)) {
+              console.warn("[databaseB2b:customers] conexão interna caiu; reiniciando e tentando novamente (legacyByTaxId)...");
+              // eslint-disable-next-line no-await-in-loop
+              await resetInternalDbConnection();
+              const customerRepoRetry = AppDataSource.getRepository(Customer);
+              // eslint-disable-next-line no-await-in-loop
+              const legacy = await customerRepoRetry
+                .createQueryBuilder("c")
+                .where("c.company_id = :companyId", { companyId: company.id })
+                .andWhere("c.external_id IN (:...ids)", { ids })
+                .getMany();
+              for (const c of legacy) {
+                const key = String(c.externalId ?? "").trim();
+                if (key) legacyByTaxId.set(key, c);
+              }
+              continue;
+            }
+            throw err;
+          }
         }
       }
 
       const repByLookup = new Map<string, Representative>();
       if (batchRepExternalIds.length) {
-        const reps = await repRepo
-          .createQueryBuilder("r")
-          .where("r.company_id = :companyId", { companyId: company.id })
-          .andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids: batchRepExternalIds })
-          .getMany();
-        for (const rep of reps) {
-          const key =
-            repLookupColumn === "external_id"
-              ? String(rep.externalId ?? "").trim()
-              : repLookupColumn === "internal_code"
-                ? String((rep as any).internalCode ?? "").trim()
-              : repLookupColumn === "document"
-                ? String((rep as any).document ?? "").trim()
-                : repLookupColumn === "name"
-                  ? String((rep as any).name ?? "").trim()
-                  : String((rep as any).category ?? "").trim();
-          if (key) repByLookup.set(key, rep);
+        for (const ids of chunkArray(batchRepExternalIds, 200)) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const reps = await repRepo
+              .createQueryBuilder("r")
+              .where("r.company_id = :companyId", { companyId: company.id })
+              .andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids })
+              .getMany();
+            for (const rep of reps) {
+              const key =
+                repLookupColumn === "external_id"
+                  ? String(rep.externalId ?? "").trim()
+                  : repLookupColumn === "internal_code"
+                    ? String((rep as any).internalCode ?? "").trim()
+                    : repLookupColumn === "document"
+                      ? String((rep as any).document ?? "").trim()
+                      : repLookupColumn === "name"
+                        ? String((rep as any).name ?? "").trim()
+                        : String((rep as any).category ?? "").trim();
+              if (key) repByLookup.set(key, rep);
+            }
+          } catch (err) {
+            if (isConnectionTerminatedError(err)) {
+              console.warn("[databaseB2b:customers] conexão interna caiu; reiniciando e tentando novamente (repByLookup)...");
+              // eslint-disable-next-line no-await-in-loop
+              await resetInternalDbConnection();
+              const repRepoRetry = AppDataSource.getRepository(Representative);
+              // eslint-disable-next-line no-await-in-loop
+              const reps = await repRepoRetry
+                .createQueryBuilder("r")
+                .where("r.company_id = :companyId", { companyId: company.id })
+                .andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids })
+                .getMany();
+              for (const rep of reps) {
+                const key =
+                  repLookupColumn === "external_id"
+                    ? String(rep.externalId ?? "").trim()
+                    : repLookupColumn === "internal_code"
+                      ? String((rep as any).internalCode ?? "").trim()
+                      : repLookupColumn === "document"
+                        ? String((rep as any).document ?? "").trim()
+                        : repLookupColumn === "name"
+                          ? String((rep as any).name ?? "").trim()
+                          : String((rep as any).category ?? "").trim();
+                if (key) repByLookup.set(key, rep);
+              }
+              continue;
+            }
+            throw err;
+          }
         }
       }
 

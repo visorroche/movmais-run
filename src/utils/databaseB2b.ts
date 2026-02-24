@@ -8,6 +8,7 @@ export type SchemaFieldTreatmentKey =
   | "concatenar_campos"
   | "usar_um_ou_outro"
   | "diferenca_entre_datas"
+  | "formula_matematica"
   | "mapear_json";
 
 export type SchemaFieldMappingValue =
@@ -269,6 +270,150 @@ export function dateDiffDays(start: unknown, end: unknown): number | null {
   return Number.isFinite(ms) ? Math.round(ms / 86_400_000) : null;
 }
 
+function toNumberLoose(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const raw = String(v).trim();
+  if (!raw) return null;
+
+  let s = raw.replace(/[^\d.,-]+/g, "");
+  if (!s) return null;
+
+  if (s.includes(",") && s.includes(".")) {
+    s = s.replace(/\./g, "").replace(/,/g, ".");
+  } else if (s.includes(",") && !s.includes(".")) {
+    s = s.replace(/,/g, ".");
+  }
+
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function evalMathFormula(formula: string, row: Record<string, any>): number | null {
+  const src = String(formula ?? "").trim();
+  if (!src) return null;
+
+  type Tok = { kind: "num"; v: number } | { kind: "op"; v: "+" | "-" | "*" | "/" | "(" | ")" } | { kind: "uop"; v: "u-" };
+  const tokens: Tok[] = [];
+
+  const s = src;
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i]!;
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+      i += 1;
+      continue;
+    }
+    if (ch === "{") {
+      const close = s.indexOf("}", i + 1);
+      if (close === -1) return null;
+      const key = s.slice(i + 1, close).trim();
+      if (!key) return null;
+      const n = toNumberLoose(row[key]);
+      if (n == null) return null;
+      tokens.push({ kind: "num", v: n });
+      i = close + 1;
+      continue;
+    }
+    if (/[0-9.,-]/.test(ch)) {
+      // número literal (não permite sinais aqui; sinal é tratado como operador/unário)
+      let j = i;
+      while (j < s.length && /[0-9.,]/.test(s[j]!)) j += 1;
+      const rawNum = s.slice(i, j);
+      const n = toNumberLoose(rawNum);
+      if (n == null) return null;
+      tokens.push({ kind: "num", v: n });
+      i = j;
+      continue;
+    }
+    if (ch === "+" || ch === "-" || ch === "*" || ch === "/" || ch === "(" || ch === ")") {
+      tokens.push({ kind: "op", v: ch });
+      i += 1;
+      continue;
+    }
+    return null;
+  }
+
+  // Shunting-yard
+  const output: Array<Tok> = [];
+  const stack: Array<Tok> = [];
+  let prev: Tok | null = null;
+
+  const prec = (t: Tok) => (t.kind === "uop" ? 3 : t.kind === "op" && (t.v === "*" || t.v === "/") ? 2 : 1);
+  const isLeftAssoc = (t: Tok) => t.kind !== "uop";
+
+  for (const t of tokens) {
+    if (t.kind === "num") {
+      output.push(t);
+      prev = t;
+      continue;
+    }
+    if (t.kind === "op" && t.v === "(") {
+      stack.push(t);
+      prev = t;
+      continue;
+    }
+    if (t.kind === "op" && t.v === ")") {
+      while (stack.length) {
+        const top = stack.pop()!;
+        if (top.kind === "op" && top.v === "(") break;
+        output.push(top);
+      }
+      prev = t;
+      continue;
+    }
+
+    // operador (+-*/)
+    if (t.kind === "op") {
+      const unary: boolean = t.v === "-" && (!prev || (prev.kind !== "num" && !(prev.kind === "op" && prev.v === ")")));
+      const opTok: Tok = unary ? { kind: "uop", v: "u-" } : t;
+      while (stack.length) {
+        const top = stack[stack.length - 1]!;
+        if (top.kind === "op" && top.v === "(") break;
+        const pTop = prec(top);
+        const pCur = prec(opTok);
+        if (pTop > pCur || (pTop === pCur && isLeftAssoc(opTok))) output.push(stack.pop()!);
+        else break;
+      }
+      stack.push(opTok);
+      prev = opTok;
+      continue;
+    }
+  }
+  while (stack.length) output.push(stack.pop()!);
+
+  // Eval RPN
+  const st: number[] = [];
+  for (const t of output) {
+    if (t.kind === "num") {
+      st.push(t.v);
+      continue;
+    }
+    if (t.kind === "uop") {
+      if (st.length < 1) return null;
+      const a = st.pop()!;
+      st.push(-a);
+      continue;
+    }
+    if (t.kind === "op") {
+      if (st.length < 2) return null;
+      const b = st.pop()!;
+      const a = st.pop()!;
+      if (t.v === "+") st.push(a + b);
+      else if (t.v === "-") st.push(a - b);
+      else if (t.v === "*") st.push(a * b);
+      else {
+        if (b === 0) return null;
+        st.push(a / b);
+      }
+      continue;
+    }
+  }
+  if (st.length !== 1) return null;
+  const out = st[0]!;
+  return Number.isFinite(out) ? out : null;
+}
+
 export function renderTemplate(template: string, row: Record<string, any>): string {
   return template.replace(/\{([^}]+)\}/g, (_, fieldRaw) => {
     const field = String(fieldRaw ?? "").trim();
@@ -355,6 +500,11 @@ export function applyFieldMapping(value: SchemaFieldMappingValue | undefined, ro
     const d = dateDiffDays(start ? row[start] : null, end ? row[end] : null);
     return d == null ? null : d;
   }
+  if (tratamento === "formula_matematica") {
+    const formula = String((opt as any).formula ?? col ?? "").trim();
+    const n = formula ? evalMathFormula(formula, row) : null;
+    return n == null ? null : n;
+  }
   if (tratamento === "mapear_json") {
     return applyMapearJson(row, opt);
   }
@@ -434,6 +584,16 @@ export function collectSourceColumnsFromMapping(
 
     if (tratamento === "concatenar_campos" && isObj(opt)) {
       const tpl = String((opt as any).concatenate ?? "");
+      tpl.replace(/\{([^}]+)\}/g, (_, f) => {
+        const key = String(f ?? "").trim();
+        if (key) out.add(key);
+        return "";
+      });
+      continue;
+    }
+
+    if (tratamento === "formula_matematica" && isObj(opt)) {
+      const tpl = String((opt as any).formula ?? field ?? "");
       tpl.replace(/\{([^}]+)\}/g, (_, f) => {
         const key = String(f ?? "").trim();
         if (key) out.add(key);

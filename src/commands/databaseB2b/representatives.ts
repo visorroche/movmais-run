@@ -28,10 +28,54 @@ function parseDateOnlyLoose(value: unknown): string | null {
   return ts ? ts.toISOString().slice(0, 10) : null;
 }
 
+function normalizeBrPhoneToE164Digits(value: unknown): string | null {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  // mantém apenas dígitos
+  let digits = raw.replace(/\D+/g, "");
+  if (!digits) return null;
+
+  // remove prefixo internacional "00" (ex: 0055...)
+  if (digits.startsWith("00")) digits = digits.slice(2);
+
+  // separa DDI (assumimos BR=55 quando ausente)
+  let ddi = "";
+  let rest = digits;
+  if (rest.startsWith("55")) {
+    ddi = "55";
+    rest = rest.slice(2);
+  } else {
+    ddi = "55";
+  }
+
+  // alguns formatos vêm com um "0" sobrando antes do DDD: (088) 9xxxx-xxxx
+  if (rest.length === 11 && rest.startsWith("0")) rest = rest.slice(1);
+  if (rest.length > 11 && rest.startsWith("0")) rest = rest.replace(/^0+/, "");
+
+  // remove eventual código de operadora (ex: 0 + 21 + DDD + número) mantendo os últimos 10/11 dígitos (DDD + número)
+  if (rest.length > 11) {
+    const last11 = rest.slice(-11);
+    const num9 = last11.slice(2);
+    rest = num9.length === 9 && num9.startsWith("9") ? last11 : rest.slice(-10);
+  }
+
+  // agora rest deve ser DDD(2) + número(8/9)
+  if (rest.length !== 10 && rest.length !== 11) return ddi + rest;
+  const ddd = rest.slice(0, 2);
+  const number = rest.slice(2);
+  if (!ddd || !number) return ddi + rest;
+
+  return `${ddi}${ddd}${number}`;
+}
+
 async function main() {
   __stage = "parse_args";
   const raw = parseCliKv(process.argv.slice(2));
-  const args = { company: parseCompanyArg(raw) };
+  const forceRaw = raw.get("force");
+  const force = raw.has("force") && String(forceRaw ?? "").trim() !== "false";
+  const args = { company: parseCompanyArg(raw), force };
   const startedAt = Date.now();
 
   if (!AppDataSource.isInitialized) await AppDataSource.initialize();
@@ -63,6 +107,21 @@ async function main() {
   const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "representative_schema");
   const syncedAtCol = schemaFieldName((fields as any).synced_at);
   const createdAtMapping = (fields as any).created_at ?? (fields as any).createdAt;
+  const supervisorLookupFieldRaw =
+    fields.supervisor_id && typeof fields.supervisor_id === "object"
+      ? String(
+          ((fields.supervisor_id as any).options?.lookupField ?? (fields.supervisor_id as any).options?.lookup_field ?? "") as any,
+        ).trim()
+      : "";
+
+  const REP_LOOKUP_COLUMN: Record<string, "external_id" | "internal_code" | "document" | "name" | "category"> = {
+    external_id: "external_id",
+    internal_code: "internal_code",
+    document: "document",
+    name: "name",
+    category: "category", // compat configs antigas
+  };
+  const supervisorLookupColumn = (supervisorLookupFieldRaw === "tax_id" ? "document" : REP_LOOKUP_COLUMN[supervisorLookupFieldRaw]) ?? "external_id";
 
   const sourceCols = collectSourceColumnsFromMapping(fields as any);
   sourceCols.add(requiredExternalId);
@@ -71,7 +130,7 @@ async function main() {
   const colsSql = sourceCols.size ? Array.from(sourceCols).map(quoteIdent).join(", ") : "*";
   const whereParts: string[] = [];
   const params: any[] = [];
-  if (syncedAtCol && lastProcessedAt) {
+  if (!args.force && syncedAtCol && lastProcessedAt) {
     params.push(lastProcessedAt.toISOString());
     whereParts.push(`${quoteIdent(syncedAtCol)} > $${params.length}`);
   }
@@ -80,8 +139,8 @@ async function main() {
 
   console.log(
     `[databaseB2b:representatives] iniciado company=${args.company} platform=${meta?.platformSlug ?? "?"} table=${table} incremental=${
-      syncedAtCol && lastProcessedAt ? "on" : "off"
-    }`,
+      !args.force && syncedAtCol && lastProcessedAt ? "on" : "off"
+    } force=${args.force ? "on" : "off"}`,
   );
 
   const ext = buildExternalClient(cfg);
@@ -183,7 +242,7 @@ async function main() {
         rep.city = (applyFieldMapping(fields.city, row) as any) ?? null;
         rep.document = (applyFieldMapping(fields.document, row) as any) ?? null;
         rep.email = (applyFieldMapping(fields.email, row) as any) ?? null;
-        rep.phone = (applyFieldMapping(fields.phone, row) as any) ?? null;
+        rep.phone = normalizeBrPhoneToE164Digits(applyFieldMapping(fields.phone, row)) ?? null;
         rep.zip = (applyFieldMapping(fields.zip, row) as any) ?? null;
         rep.address = (applyFieldMapping(fields.address, row) as any) ?? null;
         rep.number = (applyFieldMapping(fields.number, row) as any) ?? null;
@@ -215,33 +274,62 @@ async function main() {
       if (repsToSave.length) {
         const saved = await repRepo.save(repsToSave, { chunk: 250 });
 
-        const supervisorExternalIds = Array.from(new Set(Array.from(supervisorByRepExternal.values()).filter(Boolean)));
-        if (supervisorExternalIds.length) {
+        const supervisorKeys = Array.from(new Set(Array.from(supervisorByRepExternal.values()).filter(Boolean)));
+        if (supervisorKeys.length) {
           __stage = "resolve_supervisors_batch";
-          const supervisors = await repRepo
-            .createQueryBuilder("r")
-            .where("r.company_id = :companyId", { companyId: company.id })
-            .andWhere("r.external_id IN (:...ids)", { ids: supervisorExternalIds })
-            .getMany();
+          const qb = repRepo.createQueryBuilder("r").where("r.company_id = :companyId", { companyId: company.id });
+          if (supervisorLookupColumn === "internal_code") {
+            // compat: quando o cliente manda "1" e nosso internal_code está "0001"
+            qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids: supervisorKeys });
+          } else {
+            qb.andWhere(`r.${supervisorLookupColumn} IN (:...ids)`, { ids: supervisorKeys });
+          }
+          const supervisors = await qb.getMany();
 
           const supByExternal = new Map<string, Representative>();
           for (const s of supervisors) {
-            const key = String(s.externalId ?? "").trim();
-            if (key) supByExternal.set(key, s);
+            const key =
+              supervisorLookupColumn === "external_id"
+                ? String(s.externalId ?? "").trim()
+                : supervisorLookupColumn === "internal_code"
+                  ? String((s as any).internalCode ?? "").trim()
+                  : supervisorLookupColumn === "document"
+                    ? String((s as any).document ?? "").trim()
+                    : supervisorLookupColumn === "name"
+                      ? String((s as any).name ?? "").trim()
+                      : String((s as any).category ?? "").trim();
+            if (key) {
+              supByExternal.set(key, s);
+              if (supervisorLookupColumn === "internal_code") {
+                const noZeros = key.replace(/^0+/, "");
+                if (noZeros) supByExternal.set(noZeros, s);
+              }
+            }
+          }
+
+          if (supervisorKeys.length && supByExternal.size === 0) {
+            console.warn(
+              `[databaseB2b:representatives] aviso: nenhum supervisor encontrado para supervisor_id via lookupField=${supervisorLookupColumn}. ` +
+                `Exemplos keys=${supervisorKeys
+                  .slice(0, 5)
+                  .map((x) => JSON.stringify(String(x)))
+                  .join(", ")} (total=${supervisorKeys.length}). ` +
+                `Verifique se o campo mapeado em supervisor_id realmente contém o internal_code/document/etc do supervisor e se esse valor existe na tabela representatives.`,
+            );
           }
 
           const updates: Representative[] = [];
           for (const rep of saved) {
             const repExternal = String(rep.externalId ?? "").trim();
-            const supExternal = supervisorByRepExternal.get(repExternal);
-            if (!supExternal) {
+            const supKey = supervisorByRepExternal.get(repExternal);
+            if (!supKey) {
               if (rep.supervisorRef) {
                 rep.supervisorRef = null;
                 updates.push(rep);
               }
               continue;
             }
-            const nextSup = supByExternal.get(supExternal) ?? null;
+            const nextSup = supByExternal.get(supKey) ?? null;
             const curId = (rep.supervisorRef as any)?.id ?? null;
             const nextId = (nextSup as any)?.id ?? null;
             if (curId !== nextId) {

@@ -47,12 +47,12 @@ export class OrderItem {
   serviceRefSku?: string | null; // servicoRefSku
 
   /** Comissão do assistente (ex: 0.25). */
-  @Column({ type: "numeric", precision: 14, scale: 6, nullable: true, name: "assistant_comission" })
-  assistantComission?: string | null;
+  @Column({ type: "numeric", precision: 14, scale: 6, default: 0, name: "assistant_comission" })
+  assistantComission!: string;
 
   /** Comissão do supervisor (ex: 0.25). */
-  @Column({ type: "numeric", precision: 14, scale: 6, nullable: true, name: "supervisor_comission" })
-  supervisorComission?: string | null;
+  @Column({ type: "numeric", precision: 14, scale: 6, default: 0, name: "supervisor_comission" })
+  supervisorComission!: string;
 
   @Column({ type: "jsonb", nullable: true })
   metadata?: unknown;

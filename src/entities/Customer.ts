@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany, ManyToOne, JoinColumn, Unique, Index } from "typeorm";
 import { Company } from "./Company.js";
 import { CustomersGroup } from "./CustomersGroup.js";
 import { Order } from "./Order.js";
@@ -9,6 +9,7 @@ import type { Gender } from "../utils/gender.js";
 
 @Entity({ name: "customers" })
 @Unique("UQ_customers_company_id_external_id", ["company", "externalId"])
+@Index("idx_customers_company_internal_cod", ["company", "internalCod"])
 export class Customer {
   @PrimaryGeneratedColumn()
   id!: number;

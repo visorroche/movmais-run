@@ -8,6 +8,7 @@ import { User } from "../entities/User.js";
 import { CompanyUser } from "../entities/CompanyUser.js";
 import { Customer } from "../entities/Customer.js";
 import { CustomersGroup } from "../entities/CustomersGroup.js";
+import { UserActivity } from "../entities/UserActivity.js";
 import { Order } from "../entities/Order.js";
 import { OrderItem } from "../entities/OrderItem.js";
 import { Product } from "../entities/Product.js";
@@ -54,6 +55,7 @@ export const AppDataSource = new DataSource({
     CompanyUser,
     Customer,
     CustomersGroup,
+    UserActivity,
     Order,
     Product,
     OrderItem,

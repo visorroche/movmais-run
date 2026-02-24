@@ -52,7 +52,7 @@ export class Order {
   @Column({ type: "varchar", nullable: true })
   marketplaceName?: string | null; // nome do marketplace (ex.: Magalu, Shopee, etc.)
 
-  @Column({ type: "varchar", nullable: true })
+  @Column({ type: "varchar", nullable: true, default: "offline" })
   channel?: string | null; // canal
 
   // Data de pagamento (Tray: payment_date; Precode: usamos order_date)
