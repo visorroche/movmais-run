@@ -4,6 +4,7 @@ import "reflect-metadata";
 import { AppDataSource } from "../../utils/data-source.js";
 import { Company } from "../../entities/Company.js";
 import { Product } from "../../entities/Product.js";
+import { Category } from "../../entities/Category.js";
 import { parseCliKv, parseCompanyArg, quoteIdent } from "../../utils/cli.js";
 import {
   loadDatabaseB2bCompanyPlatform,
@@ -44,8 +45,62 @@ async function main() {
 
   const companyRepo = AppDataSource.getRepository(Company);
   const productRepo = AppDataSource.getRepository(Product);
+  const categoryRepo = AppDataSource.getRepository(Category);
   const company = await companyRepo.findOne({ where: { id: args.company } });
   if (!company) throw new Error(`Company ${args.company} não encontrada.`);
+
+  __stage = "load_categories_for_auto_mapping";
+  const allCategories = await categoryRepo
+    .createQueryBuilder("c")
+    .where("c.company_id = :companyId", { companyId: company.id })
+    .getMany();
+
+  const normalizeKey = (value: string | null | undefined): string => {
+    const s = String(value ?? "")
+      .trim()
+      .toLowerCase();
+    if (!s) return "";
+    const noDiacritics = s.normalize("NFD").replace(/\p{Diacritic}/gu, "");
+    const cleaned = noDiacritics
+      .replace(/[\u0000-\u001f]/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return cleaned;
+  };
+
+  // Lookup: texto normalizado -> melhor categoria (preferindo nível mais baixo / maior level)
+  const categoryLookup = (() => {
+    const map = new Map<string, Category>();
+    const sorted = [...allCategories].sort((a, b) => {
+      const la = Number((a as any)?.level ?? 0) || 0;
+      const lb = Number((b as any)?.level ?? 0) || 0;
+      if (lb !== la) return lb - la; // mais profundo primeiro
+      return (Number(a.id) || 0) - (Number(b.id) || 0);
+    });
+
+    for (const c of sorted) {
+      const nameKey = normalizeKey(c.name);
+      if (nameKey && !map.has(nameKey)) map.set(nameKey, c);
+      const syns = Array.isArray((c as any).synonymous) ? ((c as any).synonymous as any[]) : [];
+      for (const s of syns) {
+        const k = normalizeKey(String(s ?? ""));
+        if (k && !map.has(k)) map.set(k, c);
+      }
+    }
+    return map;
+  })();
+
+  const tryAutoMapCategoryId = (p: Product): number | null => {
+    const candidates = [p.finalCategory, p.subcategory, p.category];
+    for (const raw of candidates) {
+      const k = normalizeKey(raw);
+      if (!k) continue;
+      const found = categoryLookup.get(k);
+      if (found?.id) return Number(found.id) || null;
+    }
+    return null;
+  };
 
   const schema = cfg.products_schema;
   const fields = schema.fields ?? {};
@@ -214,6 +269,7 @@ async function main() {
       if (batchExternalIds.length) {
         const existing = await productRepo
           .createQueryBuilder("p")
+          .leftJoinAndSelect("p.categoryRef", "cat")
           .where("p.company_id = :companyId", { companyId: company.id })
           .andWhere("p.external_id IN (:...ids)", { ids: batchExternalIds })
           .getMany();
@@ -227,6 +283,7 @@ async function main() {
       if (batchSkus.length) {
         const existingSku = await productRepo
           .createQueryBuilder("p")
+          .leftJoinAndSelect("p.categoryRef", "cat")
           .where("p.company_id = :companyId", { companyId: company.id })
           .andWhere("p.sku IN (:...skus)", { skus: batchSkus })
           .getMany();
@@ -311,9 +368,10 @@ async function main() {
         product.brand = (applyFieldMapping(fields.brand, row) as any) ?? product.brand ?? null;
         product.model = (applyFieldMapping(fields.model, row) as any) ?? product.model ?? null;
         product.category = (applyFieldMapping(fields.category, row) as any) ?? product.category ?? null;
-        const categoryIdRaw = applyFieldMapping(fields.category_id, row);
-        product.categoryId = categoryIdRaw == null || String(categoryIdRaw).trim() === "" ? null : Number(categoryIdRaw);
-        if (product.categoryId != null && !Number.isFinite(product.categoryId)) product.categoryId = null;
+        const externalCategoryIdRaw = applyFieldMapping(fields.external_category_id ?? (fields as any).category_id, row);
+        product.externalCategoryId =
+          externalCategoryIdRaw == null || String(externalCategoryIdRaw).trim() === "" ? null : Number(externalCategoryIdRaw);
+        if (product.externalCategoryId != null && !Number.isFinite(product.externalCategoryId)) product.externalCategoryId = null;
         product.subcategory = (applyFieldMapping(fields.subcategory, row) as any) ?? product.subcategory ?? null;
         product.finalCategory = (applyFieldMapping(fields.final_category, row) as any) ?? product.finalCategory ?? null;
         product.weight = (applyFieldMapping(fields.weight, row) as any) ?? product.weight ?? null;
@@ -326,6 +384,15 @@ async function main() {
 
         const active = toBoolLoose(applyFieldMapping(fields.active, row));
         if (active != null) product.active = active;
+
+        // Auto-mapeamento: só tenta se ainda não existe category_id no nosso banco.
+        // Importante: não sobrescreve um category_id já mapeado/manual.
+        if (!product.categoryRef) {
+          const mappedId = tryAutoMapCategoryId(product);
+          if (mappedId) {
+            product.categoryRef = { id: mappedId } as Category;
+          }
+        }
 
         toSaveBySku.set(sku, product);
 

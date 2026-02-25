@@ -343,7 +343,7 @@ async function main() {
         if (!entity.manualAttributesLocked) entity.model = pickString(p, "model");
         entity.ncm = pickString(nbmObj, "id");
         if (!entity.manualAttributesLocked) entity.category = pickString(categoryObj, "path") ?? pickString(categoryObj, "name");
-        entity.categoryId = pickNumber(categoryObj, "id");
+        entity.externalCategoryId = pickNumber(categoryObj, "id");
         entity.weight = toNumericString(pickNumber(p, "weight") ?? pickString(p, "weight"));
         entity.lengthCm = toNumericString(pickNumber(p, "length") ?? pickString(p, "length"));
         entity.width = toNumericString(pickNumber(p, "width") ?? pickString(p, "width"));

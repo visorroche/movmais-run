@@ -138,6 +138,13 @@ function isQueryReadTimeoutError(err: unknown) {
   return msg.includes("Query read timeout") || drv.includes("Query read timeout");
 }
 
+function isDuplicateOrderCodeError(err: unknown) {
+  const code = String((err as any)?.driverError?.code ?? (err as any)?.code ?? "");
+  const constraint = String((err as any)?.driverError?.constraint ?? "");
+  const detail = String((err as any)?.driverError?.detail ?? "");
+  return code === "23505" && (constraint === "UQ_orders_company_id_order_code" || detail.includes("UQ_orders_company_id_order_code"));
+}
+
 async function main() {
   __stage = "parse_args";
   const argv = process.argv.slice(2);
@@ -758,6 +765,7 @@ async function main() {
     let processedItems = 0;
     let skippedExisting = 0;
     let maxSyncedAt: Date | null = null;
+    let lastCompletedSyncedAt: Date | null = null;
     let lastLogAt = 0;
     let lastCheckpointAt = 0;
     const logProgress = () => {
@@ -773,27 +781,57 @@ async function main() {
 
     const maybeCheckpoint = async () => {
       if (!syncedAtCol) return;
-      if (!maxSyncedAt) return;
+      if (!lastCompletedSyncedAt) return;
       const now = Date.now();
       if (now - lastCheckpointAt < 30_000 && processedOrders % 200 !== 0) return;
       lastCheckpointAt = now;
       try {
-        await updateDatabaseB2bLastProcessedAt(args.company, "orders_schema", maxSyncedAt.toISOString());
-        console.log(`[databaseB2b:orders] checkpoint last_processed_at=${maxSyncedAt.toISOString()}`);
+        await updateDatabaseB2bLastProcessedAt(args.company, "orders_schema", lastCompletedSyncedAt.toISOString());
+        console.log(`[databaseB2b:orders] checkpoint last_processed_at=${lastCompletedSyncedAt.toISOString()}`);
       } catch (err) {
         console.warn("[databaseB2b:orders] falha ao salvar checkpoint last_processed_at:", String((err as any)?.message ?? err));
       }
     };
 
     __stage = "process_groups";
-    for (const [orderExternalId, orderRows] of groups.entries()) {
+    const entries = Array.from(groups.entries()).map(([orderExternalId, orderRows]) => {
+      let groupSyncedAt: Date | null = null;
+      if (syncedAtMapping) {
+        for (const row of orderRows) {
+          const d = parseTimestamp(applyFieldMapping(syncedAtMapping, row));
+          if (d && (!groupSyncedAt || d.getTime() > groupSyncedAt.getTime())) groupSyncedAt = d;
+        }
+      }
+      return { orderExternalId, orderRows, groupSyncedAt };
+    });
+    entries.sort((a, b) => (a.groupSyncedAt?.getTime() ?? 0) - (b.groupSyncedAt?.getTime() ?? 0));
+
+    const loadOrderByOrderCode = async (orderCode: number): Promise<Order | null> => {
+      try {
+        return await orderRepoNow.findOne({ where: { company: { id: company.id }, orderCode } as any });
+      } catch (err) {
+        if (isConnectionTerminatedError(err) || isQueryReadTimeoutError(err)) {
+          await resetInternalDbConnectionAndRepos();
+          return await orderRepoNow.findOne({ where: { company: { id: company.id }, orderCode } as any });
+        }
+        throw err;
+      }
+    };
+
+    for (const { orderExternalId, orderRows, groupSyncedAt } of entries) {
       const first = orderRows[0]!;
 
       const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, first));
       if (!orderCode) continue;
 
       const existing = existingOrdersByExternalId.get(orderExternalId) ?? null;
-      const legacy = legacyOrdersByOrderCode.get(orderCode) ?? null;
+      let legacy = legacyOrdersByOrderCode.get(orderCode) ?? null;
+      if (!legacy) {
+        // fallback (garante upsert mesmo se o preload por order_code falhar)
+        // eslint-disable-next-line no-await-in-loop
+        legacy = await loadOrderByOrderCode(orderCode);
+        if (legacy) legacyOrdersByOrderCode.set(orderCode, legacy);
+      }
       if (args.onlyInsert && (existing || legacy)) {
         skippedExisting += 1;
         continue;
@@ -864,6 +902,21 @@ async function main() {
         // eslint-disable-next-line no-await-in-loop
         order = await orderRepoNow.save(order);
       } catch (err) {
+        if (isDuplicateOrderCodeError(err)) {
+          console.warn(
+            `[databaseB2b:orders] conflito UQ_orders_company_id_order_code (order_code=${orderCode}). Tentando recuperar registro existente e atualizar...`,
+          );
+          // eslint-disable-next-line no-await-in-loop
+          const recovered = await loadOrderByOrderCode(orderCode);
+          if (recovered) {
+            // garante update e não insert
+            (order as any).id = (recovered as any).id;
+            // eslint-disable-next-line no-await-in-loop
+            order = await orderRepoNow.save(order);
+          } else {
+            throw err;
+          }
+        } else
         if (isConnectionTerminatedError(err) || isQueryReadTimeoutError(err)) {
           console.warn("[databaseB2b:orders] erro ao salvar order; reiniciando conexão interna e tentando novamente...");
           // eslint-disable-next-line no-await-in-loop
@@ -875,6 +928,10 @@ async function main() {
         }
       }
       existingOrdersByExternalId.set(orderExternalId, order);
+      if (groupSyncedAt) {
+        lastCompletedSyncedAt = groupSyncedAt;
+        if (!maxSyncedAt || groupSyncedAt.getTime() > maxSyncedAt.getTime()) maxSyncedAt = groupSyncedAt;
+      }
 
       // itens: upsert por external_id (e remove os que sumiram)
       const incomingItemExternalIdsPerOrder: string[] = [];

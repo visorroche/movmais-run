@@ -331,7 +331,7 @@ async function ensureProducts(company: Company): Promise<Product[]> {
     e.sku = d.sku;
     e.name = d.name;
     e.category = d.category;
-    e.categoryId = null;
+    e.externalCategoryId = null;
     e.brand = "Fake Móveis";
     e.brandId = null;
     e.model = null;

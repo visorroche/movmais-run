@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
 import { Company } from "./Company.js";
+import { Category } from "./Category.js";
 
 @Entity({ name: "products" })
 @Unique("UQ_products_company_id_sku", ["company", "sku"])
@@ -70,8 +71,14 @@ export class Product {
   @Column({ type: "varchar", nullable: true })
   category?: string | null;
 
-  @Column({ type: "integer", nullable: true })
-  categoryId?: number | null;
+  /** ID da categoria na plataforma externa (Tray, Precode, etc.). */
+  @Column({ type: "integer", nullable: true, name: "external_category_id" })
+  externalCategoryId?: number | null;
+
+  /** Vínculo com categoria do nosso banco (tabela categories). */
+  @ManyToOne(() => Category, { nullable: true, onDelete: "SET NULL" })
+  @JoinColumn({ name: "category_id" })
+  categoryRef?: Category | null;
 
   @Column({ type: "varchar", nullable: true })
   subcategory?: string | null;

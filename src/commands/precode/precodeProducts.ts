@@ -235,7 +235,7 @@ async function main() {
         entity.ean = entity.ean ?? null;
         entity.slug = entity.slug ?? null;
         entity.brandId = entity.brandId ?? null;
-        entity.categoryId = entity.categoryId ?? null;
+        entity.externalCategoryId = entity.externalCategoryId ?? null;
         entity.url = entity.url ?? null;
 
         // Preferimos o detalhamento ProdutoSku; fallback para ListaProduto

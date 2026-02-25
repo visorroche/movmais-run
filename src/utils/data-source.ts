@@ -12,6 +12,7 @@ import { UserActivity } from "../entities/UserActivity.js";
 import { Order } from "../entities/Order.js";
 import { OrderItem } from "../entities/OrderItem.js";
 import { Product } from "../entities/Product.js";
+import { Category } from "../entities/Category.js";
 import { Representative } from "../entities/Representative.js";
 import { FreightQuote } from "../entities/FreightQuote.js";
 import { FreightQuoteItem } from "../entities/FreightQuoteItem.js";
@@ -59,6 +60,7 @@ export const AppDataSource = new DataSource({
     Order,
     Product,
     OrderItem,
+    Category,
     Representative,
     FreightQuote,
     FreightQuoteItem,
