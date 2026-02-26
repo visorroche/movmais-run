@@ -237,6 +237,7 @@ async function main() {
         rep.company = company;
         rep.externalId = externalId;
         rep.name = String(applyFieldMapping(fields.name, row) ?? rep.name ?? "").trim() || rep.name || "";
+        rep.active = toBoolLoose(applyFieldMapping((fields as any).active, row)) ?? rep.active ?? true;
         rep.supervisor = toBoolLoose(applyFieldMapping(fields.supervisor, row)) ?? rep.supervisor ?? false;
         rep.state = (applyFieldMapping(fields.state, row) as any) ?? null;
         rep.city = (applyFieldMapping(fields.city, row) as any) ?? null;

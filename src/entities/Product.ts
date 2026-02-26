@@ -50,6 +50,10 @@ export class Product {
   @Column({ type: "varchar", nullable: true })
   model?: string | null;
 
+  /** Preço/valor do produto. */
+  @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
+  value?: string | null;
+
   // peso do produto (kg)
   @Column({ type: "numeric", precision: 14, scale: 3, nullable: true })
   weight?: string | null;

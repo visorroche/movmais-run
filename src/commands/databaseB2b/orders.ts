@@ -271,89 +271,44 @@ async function main() {
   try {
     let rows: Record<string, any>[] = [];
 
-    // Incremental com segurança: primeiro seleciona order_codes alterados e depois busca TODAS as linhas desses pedidos,
-    // senão perderíamos itens não-alterados (pois o script substitui itens por pedido).
-    if (!args.force && syncedAtCol && lastProcessedAt && orderExternalIdCol) {
-      const paramsChanged = params.slice();
-      paramsChanged.push(lastProcessedAt.toISOString());
-      const changedWhereParts = whereParts.slice();
-      changedWhereParts.push(`${quoteIdent(syncedAtCol)} > $${paramsChanged.length}`);
-      const changedWhereSql = changedWhereParts.length ? ` WHERE ${changedWhereParts.join(" AND ")}` : "";
+    // Sempre buscar por intervalo de datas (order_date). synced_at NÃO filtra o fetch:
+    // - Insert: se não temos o pedido, sempre inserir.
+    // - Update: só atualizar se synced_at do cliente for maior que lastProcessedAt (evita sobrescrever com dado antigo).
+    __stage = "fetch_external";
+    let expectedRowCount: number | null = null;
+    try {
+      const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`, params);
+      const cRaw = (resCount.rows ?? [])?.[0]?.c;
+      const n = Number(cRaw);
+      if (Number.isFinite(n) && n >= 0) expectedRowCount = n;
+    } catch {
+      expectedRowCount = null;
+    }
 
-      // Normaliza para texto porque no banco do cliente o external_id pode ser numeric/int
-      const sqlChanged = `SELECT DISTINCT ${quoteIdent(orderExternalIdCol)}::text AS external_id FROM ${quoteIdent(table)}${changedWhereSql}`;
-      const changedRows: { external_id: any }[] = [];
-      for (let offset = 0; ; offset += 5000) {
-        // eslint-disable-next-line no-await-in-loop
-        const res = await externalQuery(`${sqlChanged} LIMIT 5000 OFFSET ${offset}`, paramsChanged);
-        const batch = (res.rows ?? []) as { external_id: any }[];
-        changedRows.push(...batch);
-        if (batch.length < 5000) break;
-      }
-      const changedExternalIds = Array.from(
-        new Set(changedRows.map((r) => String((r as any).external_id ?? "").trim()).filter((s) => s.length > 0)),
+    const BATCH_SIZE = 5000;
+    let fetched = 0;
+    let lastFetchLogAt = 0;
+    const logFetch = () => {
+      const now = Date.now();
+      if (now - lastFetchLogAt < 1500) return;
+      lastFetchLogAt = now;
+      const pct = expectedRowCount && expectedRowCount > 0 ? Math.min(100, Math.round((fetched / expectedRowCount) * 100)) : null;
+      const pctTxt = pct == null ? "" : ` (${pct}%)`;
+      const elapsed = Math.round((now - startedAt) / 1000);
+      console.log(
+        `[databaseB2b:orders] fetch rows=${fetched}${expectedRowCount != null ? `/${expectedRowCount}` : ""}${pctTxt} elapsed=${elapsed}s`,
       );
+    };
 
-      if (changedExternalIds.length === 0) {
-        const range = args.startDate || args.endDate ? ` range=${args.startDate ?? ""}..${args.endDate ?? ""}` : "";
-        console.log(`[databaseB2b:orders] company=${args.company}${range} orders_processed=0 items_processed=0 skipped_existing=0`);
-        return;
-      }
-
-      const CHUNK = 500;
-      for (let i = 0; i < changedExternalIds.length; i += CHUNK) {
-        const chunk = changedExternalIds.slice(i, i + CHUNK);
-        const p: any[] = [chunk];
-        const parts: string[] = [`${quoteIdent(orderExternalIdCol)}::text = ANY($1::text[])`];
-        if (orderDateCol && args.startDate) {
-          p.push(args.startDate);
-          parts.push(`${quoteIdent(orderDateCol)} >= $${p.length}`);
-        }
-        if (orderDateCol && args.endDate) {
-          p.push(args.endDate);
-          parts.push(`${quoteIdent(orderDateCol)} <= $${p.length}`);
-        }
-        // eslint-disable-next-line no-await-in-loop
-        const res = await externalQuery(`SELECT ${colsSql} FROM ${quoteIdent(table)} WHERE ${parts.join(" AND ")}`, p);
-        rows.push(...(res.rows ?? []));
-      }
-    } else {
-      __stage = "fetch_external";
-      let totalRows: number | null = null;
-      try {
-        const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`, params);
-        const cRaw = (resCount.rows ?? [])?.[0]?.c;
-        const n = Number(cRaw);
-        if (Number.isFinite(n) && n >= 0) totalRows = n;
-      } catch {
-        totalRows = null;
-      }
-
-      const BATCH_SIZE = 5000;
-      let fetched = 0;
-      let lastFetchLogAt = 0;
-      const logFetch = () => {
-        const now = Date.now();
-        if (now - lastFetchLogAt < 1500) return;
-        lastFetchLogAt = now;
-        const pct = totalRows && totalRows > 0 ? Math.min(100, Math.round((fetched / totalRows) * 100)) : null;
-        const pctTxt = pct == null ? "" : ` (${pct}%)`;
-        const elapsed = Math.round((now - startedAt) / 1000);
-        console.log(
-          `[databaseB2b:orders] fetch rows=${fetched}${totalRows != null ? `/${totalRows}` : ""}${pctTxt} elapsed=${elapsed}s`,
-        );
-      };
-
-      const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${dateWhereSql}`;
-      for (let offset = 0; ; offset += BATCH_SIZE) {
-        // eslint-disable-next-line no-await-in-loop
-        const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
-        const batch = (res.rows ?? []) as Record<string, any>[];
-        rows.push(...batch);
-        fetched += batch.length;
-        logFetch();
-        if (batch.length < BATCH_SIZE) break;
-      }
+    const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${dateWhereSql}`;
+    for (let offset = 0; ; offset += BATCH_SIZE) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
+      const batch = (res.rows ?? []) as Record<string, any>[];
+      rows.push(...batch);
+      fetched += batch.length;
+      logFetch();
+      if (batch.length < BATCH_SIZE) break;
     }
 
     __stage = "group_rows";
@@ -833,6 +788,11 @@ async function main() {
         if (legacy) legacyOrdersByOrderCode.set(orderCode, legacy);
       }
       if (args.onlyInsert && (existing || legacy)) {
+        skippedExisting += 1;
+        continue;
+      }
+      // Update só quando synced_at do cliente for mais recente; insert sempre.
+      if ((existing || legacy) && lastProcessedAt && groupSyncedAt && groupSyncedAt.getTime() <= lastProcessedAt.getTime()) {
         skippedExisting += 1;
         continue;
       }

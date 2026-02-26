@@ -24,10 +24,36 @@ import {
 
 let __stage = "init";
 
+function toNumberLoose(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const raw = String(v).trim();
+  if (!raw) return null;
+  let s = raw.replace(/[^\d.,-]+/g, "");
+  if (!s) return null;
+  if (s.includes(",") && s.includes(".")) {
+    s = s.replace(/\./g, "").replace(/,/g, ".");
+  } else if (s.includes(",") && !s.includes(".")) {
+    s = s.replace(/,/g, ".");
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toNumericStringFixed(v: unknown, scale: number): string | null {
+  const n = toNumberLoose(v);
+  if (n == null) return null;
+  const p = 10 ** Math.max(0, Math.min(8, Math.trunc(scale)));
+  const rounded = Math.round(n * p) / p;
+  return rounded.toFixed(scale);
+}
+
 async function main() {
   __stage = "parse_args";
   const raw = parseCliKv(process.argv.slice(2));
-  const args = { company: parseCompanyArg(raw) };
+  const forceRaw = raw.get("force");
+  const force = raw.has("force") && String(forceRaw ?? "").trim() !== "false";
+  const args = { company: parseCompanyArg(raw), force };
   const startedAt = Date.now();
   if (!AppDataSource.isInitialized) await AppDataSource.initialize();
 
@@ -112,8 +138,8 @@ async function main() {
 
   console.log(
     `[databaseB2b:products] iniciado company=${args.company} platform=${meta?.platformSlug ?? "?"} table=${table} incremental=${
-      syncedAtCol && lastProcessedAt ? "on" : "off"
-    }`,
+      !args.force && syncedAtCol && lastProcessedAt ? "on" : "off"
+    } force=${args.force ? "on" : "off"}`,
   );
 
   const sourceCols = new Set<string>();
@@ -168,6 +194,16 @@ async function main() {
       continue;
     }
 
+    if (tratamento === "formula_matematica" && isObj(opt)) {
+      const tpl = String((opt as any).formula ?? field ?? "");
+      tpl.replace(/\{([^}]+)\}/g, (_, f) => {
+        const key = String(f ?? "").trim();
+        if (key) sourceCols.add(key);
+        return "";
+      });
+      continue;
+    }
+
     if (tratamento === "usar_um_ou_outro" && isObj(opt)) {
       const main = String((opt as any).main ?? "").trim();
       const fallback = String((opt as any).fallback ?? "").trim();
@@ -192,14 +228,63 @@ async function main() {
   const colsSql = sourceCols.size ? Array.from(sourceCols).map(quoteIdent).join(", ") : "*";
   const whereParts: string[] = [];
   const params: any[] = [];
-  if (syncedAtCol && lastProcessedAt) {
+  if (!args.force && syncedAtCol && lastProcessedAt) {
     params.push(lastProcessedAt.toISOString());
     whereParts.push(`${quoteIdent(syncedAtCol)} > $${params.length}`);
   }
   const whereSql = whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : "";
 
   const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${whereSql}`;
-  const ext = buildExternalClient(cfg);
+  const isExternalConnError = (err: unknown) => {
+    const code = String((err as any)?.code ?? "");
+    const msg = String((err as any)?.message ?? "");
+    return (
+      code === "ECONNRESET" ||
+      code === "ETIMEDOUT" ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("Connection terminated unexpectedly") ||
+      msg.includes("terminating connection") ||
+      msg.includes("timeout")
+    );
+  };
+
+  let ext = buildExternalClient(cfg);
+  let externalErrorLogged = false;
+  const attachExternalErrorHandler = () => {
+    ext.on("error", (err: any) => {
+      // Importante: sem listener de 'error', o Node derruba o processo (Unhandled 'error' event)
+      if (!externalErrorLogged) {
+        externalErrorLogged = true;
+        console.warn("[databaseB2b:products] conexão externa caiu:", String(err?.message ?? err));
+      }
+    });
+  };
+  const reconnectExternal = async (reason: string) => {
+    console.warn(`[databaseB2b:products] reconectando ao banco do cliente (${reason})...`);
+    try {
+      await ext.end().catch(() => {});
+    } catch {
+      // ignore
+    }
+    ext = buildExternalClient(cfg);
+    externalErrorLogged = false;
+    attachExternalErrorHandler();
+    __stage = "connect_external_db";
+    await ext.connect();
+  };
+  const externalQuery = async (sql: string, p: any[]) => {
+    try {
+      return await ext.query(sql, p);
+    } catch (err) {
+      if (isExternalConnError(err)) {
+        await reconnectExternal("query_failed");
+        return await ext.query(sql, p);
+      }
+      throw err;
+    }
+  };
+
+  attachExternalErrorHandler();
   __stage = "connect_external_db";
   await ext.connect();
   try {
@@ -216,7 +301,7 @@ async function main() {
     let totalRows: number | null = null;
     try {
       console.log("[databaseB2b:products] contando linhas no banco do cliente...");
-      const resCount = await ext.query(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${whereSql}`, params);
+      const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${whereSql}`, params);
       const cRaw = resCount.rows?.[0]?.c;
       const n = Number(cRaw);
       if (Number.isFinite(n) && n >= 0) totalRows = n;
@@ -246,7 +331,7 @@ async function main() {
     __stage = "fetch_and_process";
     for (let offset = 0; ; offset += BATCH_SIZE) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await ext.query(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
+      const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
       const batch = (res.rows ?? []) as Record<string, any>[];
       fetched += batch.length;
       logProgress("fetch");
@@ -267,6 +352,7 @@ async function main() {
       __stage = "load_existing_products_batch";
       const existingByExternalId = new Map<string, Product>();
       if (batchExternalIds.length) {
+        const t0 = Date.now();
         const existing = await productRepo
           .createQueryBuilder("p")
           .leftJoinAndSelect("p.categoryRef", "cat")
@@ -277,10 +363,13 @@ async function main() {
           const k = String(p.externalId ?? "").trim();
           if (k) existingByExternalId.set(k, p);
         });
+        const dt = Date.now() - t0;
+        if (dt > 3000) console.log(`[databaseB2b:products] lookup existingByExternalId ids=${batchExternalIds.length} took=${dt}ms`);
       }
 
       const existingBySku = new Map<string, Product>();
       if (batchSkus.length) {
+        const t0 = Date.now();
         const existingSku = await productRepo
           .createQueryBuilder("p")
           .leftJoinAndSelect("p.categoryRef", "cat")
@@ -291,6 +380,8 @@ async function main() {
           const k = String(p.sku ?? "").trim();
           if (k) existingBySku.set(k, p);
         });
+        const dt = Date.now() - t0;
+        if (dt > 3000) console.log(`[databaseB2b:products] lookup existingBySku skus=${batchSkus.length} took=${dt}ms`);
       }
 
       __stage = "transform_batch";
@@ -367,6 +458,7 @@ async function main() {
         if (product.brandId != null && !Number.isFinite(product.brandId)) product.brandId = null;
         product.brand = (applyFieldMapping(fields.brand, row) as any) ?? product.brand ?? null;
         product.model = (applyFieldMapping(fields.model, row) as any) ?? product.model ?? null;
+        product.value = toNumericStringFixed(applyFieldMapping((fields as any).value, row), 2) ?? product.value ?? null;
         product.category = (applyFieldMapping(fields.category, row) as any) ?? product.category ?? null;
         const externalCategoryIdRaw = applyFieldMapping(fields.external_category_id ?? (fields as any).category_id, row);
         product.externalCategoryId =
@@ -414,7 +506,10 @@ async function main() {
 
       const toSave = Array.from(toSaveBySku.values());
       if (toSave.length) {
+        const t0 = Date.now();
         await productRepo.save(toSave, { chunk: 250 });
+        const dt = Date.now() - t0;
+        if (dt > 3000) console.log(`[databaseB2b:products] save batch size=${toSave.length} took=${dt}ms`);
         upserts += toSave.length;
         processed += toSave.length;
         logProgress("process");

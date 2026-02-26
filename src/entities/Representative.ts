@@ -30,6 +30,10 @@ export class Representative {
   @Column({ type: "varchar", nullable: true })
   avatar?: string | null;
 
+  /** Quando FALSE, representante está inativo e deve ser ocultado por padrão. */
+  @Column({ type: "boolean", default: true })
+  active!: boolean;
+
   @Column({ type: "boolean", default: false })
   supervisor!: boolean;
 
