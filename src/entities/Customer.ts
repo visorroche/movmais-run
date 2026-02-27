@@ -10,6 +10,7 @@ import type { Gender } from "../utils/gender.js";
 @Entity({ name: "customers" })
 @Unique("UQ_customers_company_id_external_id", ["company", "externalId"])
 @Index("idx_customers_company_internal_cod", ["company", "internalCod"])
+@Index("idx_customers_customer_group_id", ["customerGroup"])
 export class Customer {
   @PrimaryGeneratedColumn()
   id!: number;

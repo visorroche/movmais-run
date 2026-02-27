@@ -20,9 +20,11 @@ type JobName =
   | "precode:orders"
   | "tray:orders"
   | "databaseB2b:representatives"
+  | "databaseB2b:customersGroups"
   | "databaseB2b:customers"
   | "databaseB2b:products"
   | "databaseB2b:orders"
+  | "databaseB2b:sync"
   | "resume:freight";
 
 const JOB_LOCKS = new Map<JobName, boolean>();
@@ -168,6 +170,10 @@ function startHttpServer() {
         scriptRel: "commands/databaseB2b/representatives.js",
         buildArgs: ({ companyId }) => [`--company=${companyId}`],
       },
+      customers_groups: {
+        scriptRel: "commands/databaseB2b/customersGroups.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
       customers: {
         scriptRel: "commands/databaseB2b/customers.js",
         buildArgs: ({ companyId }) => [`--company=${companyId}`],
@@ -192,6 +198,10 @@ function startHttpServer() {
         scriptRel: "commands/databaseB2b/representatives.js",
         buildArgs: ({ companyId }) => [`--company=${companyId}`],
       },
+      customers_groups: {
+        scriptRel: "commands/databaseB2b/customersGroups.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
       customers: {
         scriptRel: "commands/databaseB2b/customers.js",
         buildArgs: ({ companyId }) => [`--company=${companyId}`],
@@ -213,6 +223,7 @@ function startHttpServer() {
     },
     databaseb2b: {
       representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      customers_groups: { scriptRel: "commands/databaseB2b/customersGroups.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
       customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
       products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
       orders: {
@@ -228,6 +239,7 @@ function startHttpServer() {
     },
     databaseB2b: {
       representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      customers_groups: { scriptRel: "commands/databaseB2b/customersGroups.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
       customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
       products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
       orders: {
@@ -508,6 +520,71 @@ async function runForCompaniesSlugs(platformSlugs: string[], scriptRel: string, 
   await Promise.all(Array.from({ length: workerCount }, (_, i) => worker(i + 1)));
 }
 
+async function runDatabaseB2bPipelineForCompanies(platformSlugs: string[], startDateYmd: string, endDateYmd: string) {
+  const ids = await listCompanyIdsForPlatformSlugs(platformSlugs);
+  if (ids.length === 0) {
+    console.log(`[scheduler] platform=${platformSlugs.join(",")} sem companies instaladas; nada a fazer.`);
+    return;
+  }
+
+  const DEFAULT_CONCURRENCY = 5;
+  const concurrencyRaw = process.env.SCHEDULER_COMPANY_CONCURRENCY;
+  const concurrencyParsed = concurrencyRaw ? Number(concurrencyRaw) : DEFAULT_CONCURRENCY;
+  const concurrency = Number.isInteger(concurrencyParsed) && concurrencyParsed > 0 ? concurrencyParsed : DEFAULT_CONCURRENCY;
+
+  const scripts = {
+    representatives: resolveDistScript("commands/databaseB2b/representatives.js"),
+    customersGroups: resolveDistScript("commands/databaseB2b/customersGroups.js"),
+    customers: resolveDistScript("commands/databaseB2b/customers.js"),
+    products: resolveDistScript("commands/databaseB2b/products.js"),
+    orders: resolveDistScript("commands/databaseB2b/orders.js"),
+  };
+
+  const queue = ids.slice();
+  const worker = async (workerIdx: number) => {
+    while (!shuttingDown) {
+      const companyId = queue.shift();
+      if (!companyId) return;
+
+      const baseLabel = `${platformSlugs.join(",")} company=${companyId}`;
+      console.log(`[scheduler] databaseB2b pipeline iniciando ${baseLabel} (worker=${workerIdx}/${concurrency})`);
+
+      const runStep = async (step: string, scriptPath: string, argv: string[]) => {
+        const label = `${baseLabel} step=${step}`;
+        console.log(`[scheduler] databaseB2b pipeline executando ${label}`);
+        await runNodeScript(scriptPath, argv, label);
+      };
+
+      try {
+        // Ordem respeitando dependências:
+        // 1) representatives (customers e orders dependem)
+        // 2) customersGroups (customers.group_id depende)
+        // 3) customers (orders dependem)
+        // 4) products (orders dependem)
+        // 5) orders (por último)
+        // eslint-disable-next-line no-await-in-loop
+        await runStep("representatives", scripts.representatives, [`--company=${companyId}`]);
+        // eslint-disable-next-line no-await-in-loop
+        await runStep("customersGroups", scripts.customersGroups, [`--company=${companyId}`]);
+        // eslint-disable-next-line no-await-in-loop
+        await runStep("customers", scripts.customers, [`--company=${companyId}`]);
+        // eslint-disable-next-line no-await-in-loop
+        await runStep("products", scripts.products, [`--company=${companyId}`]);
+        // eslint-disable-next-line no-await-in-loop
+        await runStep("orders", scripts.orders, [`--company=${companyId}`, `--start-date=${startDateYmd}`, `--end-date=${endDateYmd}`]);
+      } catch (err) {
+        console.error(`[scheduler] databaseB2b pipeline erro ${baseLabel}:`, err);
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(250);
+    }
+  };
+
+  const workerCount = Math.min(concurrency, ids.length);
+  await Promise.all(Array.from({ length: workerCount }, (_, i) => worker(i + 1)));
+}
+
 async function main() {
   const EVERY_30_MIN = 30 * 60 * 1000;
   const EVERY_1_HOUR = 60 * 60 * 1000;
@@ -603,27 +680,11 @@ async function main() {
   // job: database B2B (a cada 1h)
   // Observação: aceitamos variações de slug para compatibilidade.
   const DBB2B_SLUGS = ["b2b_database", "database_b2b", "databaseb2b", "databaseB2b"];
-  const tickDatabaseB2bRepresentatives = () =>
-    runJob("databaseB2b:representatives", async () => {
-      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/representatives.js", (companyId) => [`--company=${companyId}`]);
-    });
-  const tickDatabaseB2bCustomers = () =>
-    runJob("databaseB2b:customers", async () => {
-      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/customers.js", (companyId) => [`--company=${companyId}`]);
-    });
-  const tickDatabaseB2bProducts = () =>
-    runJob("databaseB2b:products", async () => {
-      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/products.js", (companyId) => [`--company=${companyId}`]);
-    });
-  const tickDatabaseB2bOrders = () =>
-    runJob("databaseB2b:orders", async () => {
+  const tickDatabaseB2bSync = () =>
+    runJob("databaseB2b:sync", async () => {
       const end = formatYmdUtc(utcMidnight(new Date()));
       const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
-      await runForCompaniesSlugs(DBB2B_SLUGS, "commands/databaseB2b/orders.js", (companyId) => [
-        `--company=${companyId}`,
-        `--start-date=${start}`,
-        `--end-date=${end}`,
-      ]);
+      await runDatabaseB2bPipelineForCompanies(DBB2B_SLUGS, start, end);
     });
 
   console.log("[scheduler] iniciado.");
@@ -640,10 +701,7 @@ async function main() {
   setTimeout(() => void tickTrayProducts(), 10_000);
   setTimeout(() => void tickAnymarketProducts(), 12_000);
   setTimeout(() => void tickAnymarketOrders(), 14_000);
-  setTimeout(() => void tickDatabaseB2bRepresentatives(), 16_000);
-  setTimeout(() => void tickDatabaseB2bCustomers(), 18_000);
-  setTimeout(() => void tickDatabaseB2bProducts(), 20_000);
-  setTimeout(() => void tickDatabaseB2bOrders(), 22_000);
+  setTimeout(() => void tickDatabaseB2bSync(), 16_000);
   setTimeout(() => void tickResumeFreight(), 28_000);
 
   const timers: NodeJS.Timeout[] = [];
@@ -656,10 +714,7 @@ async function main() {
   timers.push(setInterval(() => void tickTrayProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickAnymarketProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickResumeFreight(), EVERY_24_HOURS));
-  timers.push(setInterval(() => void tickDatabaseB2bRepresentatives(), EVERY_1_HOUR));
-  timers.push(setInterval(() => void tickDatabaseB2bCustomers(), EVERY_1_HOUR));
-  timers.push(setInterval(() => void tickDatabaseB2bProducts(), EVERY_1_HOUR));
-  timers.push(setInterval(() => void tickDatabaseB2bOrders(), EVERY_1_HOUR));
+  timers.push(setInterval(() => void tickDatabaseB2bSync(), EVERY_1_HOUR));
 
   // loop “keep alive” para permitir shutdown gracioso
   while (!shuttingDown) {

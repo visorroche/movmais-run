@@ -8,6 +8,7 @@ import type { OrderStatus } from "../utils/status/index.js";
 
 @Entity({ name: "orders" })
 @Index("idx_orders_customer_id", ["customer"])
+@Index("idx_orders_company_customer_orderdate", ["company", "customer", "orderDate"])
 @Unique("UQ_orders_company_id_order_code", ["company", "orderCode"])
 export class Order {
   @PrimaryGeneratedColumn()

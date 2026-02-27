@@ -48,6 +48,7 @@ export type DatabaseB2bConfig = {
   orders_schema?: DatabaseB2bOrdersSchema;
   products_schema?: DatabaseB2bSimpleSchema;
   customers_schema?: DatabaseB2bSimpleSchema;
+  customers_group_schema?: DatabaseB2bSimpleSchema;
   representative_schema?: DatabaseB2bSimpleSchema;
 };
 
@@ -112,7 +113,12 @@ export async function loadDatabaseB2bCompanyPlatform(companyId: number): Promise
 }
 
 const DBB2B_PLATFORM_SLUGS = ["b2b_database", "database_b2b", "databaseb2b", "databaseB2b"] as const;
-export type DatabaseB2bSchemaKey = "products_schema" | "customers_schema" | "representative_schema" | "orders_schema";
+export type DatabaseB2bSchemaKey =
+  | "products_schema"
+  | "customers_schema"
+  | "customers_group_schema"
+  | "representative_schema"
+  | "orders_schema";
 
 export async function listCompanyPlatformsForCompany(companyId: number): Promise<Array<{ id: number; slug: string }>> {
   if (!AppDataSource.isInitialized) await AppDataSource.initialize();
@@ -167,6 +173,7 @@ export function describeDatabaseB2bConfig(cfg: DatabaseB2bConfig) {
     orders_schema: schemaInfo("orders_schema"),
     products_schema: schemaInfo("products_schema"),
     customers_schema: schemaInfo("customers_schema"),
+    customers_group_schema: schemaInfo("customers_group_schema"),
     representative_schema: schemaInfo("representative_schema"),
   };
 }

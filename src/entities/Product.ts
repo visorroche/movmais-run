@@ -1,9 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique, Index } from "typeorm";
 import { Company } from "./Company.js";
 import { Category } from "./Category.js";
 
 @Entity({ name: "products" })
 @Unique("UQ_products_company_id_sku", ["company", "sku"])
+@Index("idx_products_company_category", ["company", "categoryRef"])
 export class Product {
   @PrimaryGeneratedColumn()
   id!: number;

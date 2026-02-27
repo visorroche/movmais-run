@@ -4,6 +4,7 @@ import "reflect-metadata";
 import { AppDataSource } from "../../utils/data-source.js";
 import { Company } from "../../entities/Company.js";
 import { Customer } from "../../entities/Customer.js";
+import { CustomersGroup } from "../../entities/CustomersGroup.js";
 import { Representative } from "../../entities/Representative.js";
 import { parseCliKv, parseCompanyArg, quoteIdent } from "../../utils/cli.js";
 import {
@@ -67,7 +68,9 @@ function isConnectionTerminatedError(err: unknown) {
 async function main() {
   __stage = "parse_args";
   const raw = parseCliKv(process.argv.slice(2));
-  const args = { company: parseCompanyArg(raw) };
+  const forceRaw = raw.get("force");
+  const force = raw.has("force") && String(forceRaw ?? "").trim() !== "false";
+  const args = { company: parseCompanyArg(raw), force };
   const startedAt = Date.now();
   if (!AppDataSource.isInitialized) await AppDataSource.initialize();
 
@@ -85,6 +88,7 @@ async function main() {
 
   const companyRepo = AppDataSource.getRepository(Company);
   const customerRepo = AppDataSource.getRepository(Customer);
+  const groupRepo = AppDataSource.getRepository(CustomersGroup);
   const repRepo = AppDataSource.getRepository(Representative);
   const company = await companyRepo.findOne({ where: { id: args.company } });
   if (!company) throw new Error(`Company ${args.company} não encontrada.`);
@@ -123,7 +127,7 @@ async function main() {
   const colsSql = sourceCols.size ? Array.from(sourceCols).map(quoteIdent).join(", ") : "*";
   const whereParts: string[] = [];
   const params: any[] = [];
-  if (syncedAtCol && lastProcessedAt) {
+  if (!args.force && syncedAtCol && lastProcessedAt) {
     params.push(lastProcessedAt.toISOString());
     whereParts.push(`${quoteIdent(syncedAtCol)} > $${params.length}`);
   }
@@ -132,11 +136,60 @@ async function main() {
 
   console.log(
     `[databaseB2b:customers] iniciado company=${args.company} platform=${meta?.platformSlug ?? "?"} table=${table} incremental=${
-      syncedAtCol && lastProcessedAt ? "on" : "off"
-    }`,
+      !args.force && syncedAtCol && lastProcessedAt ? "on" : "off"
+    } force=${args.force ? "on" : "off"}`,
   );
 
-  const ext = buildExternalClient(cfg);
+  const isExternalConnError = (err: unknown) => {
+    const code = String((err as any)?.code ?? "");
+    const msg = String((err as any)?.message ?? "");
+    return (
+      code === "ECONNRESET" ||
+      code === "ETIMEDOUT" ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("Connection terminated unexpectedly") ||
+      msg.includes("terminating connection") ||
+      msg.includes("timeout")
+    );
+  };
+
+  let ext = buildExternalClient(cfg);
+  let externalErrorLogged = false;
+  const attachExternalErrorHandler = () => {
+    ext.on("error", (err: any) => {
+      // Importante: sem listener de 'error', o Node derruba o processo (Unhandled 'error' event)
+      if (!externalErrorLogged) {
+        externalErrorLogged = true;
+        console.warn("[databaseB2b:customers] conexão externa caiu:", String(err?.message ?? err));
+      }
+    });
+  };
+  const reconnectExternal = async (reason: string) => {
+    console.warn(`[databaseB2b:customers] reconectando ao banco do cliente (${reason})...`);
+    try {
+      await ext.end().catch(() => {});
+    } catch {
+      // ignore
+    }
+    ext = buildExternalClient(cfg);
+    externalErrorLogged = false;
+    attachExternalErrorHandler();
+    __stage = "connect_external_db";
+    await ext.connect();
+  };
+  const externalQuery = async (sql: string, p: any[]) => {
+    try {
+      return await ext.query(sql, p);
+    } catch (err) {
+      if (isExternalConnError(err)) {
+        await reconnectExternal("query_failed");
+        return await ext.query(sql, p);
+      }
+      throw err;
+    }
+  };
+
+  attachExternalErrorHandler();
   __stage = "connect_external_db";
   await ext.connect();
   try {
@@ -150,7 +203,7 @@ async function main() {
     let totalRows: number | null = null;
     try {
       console.log("[databaseB2b:customers] contando linhas no banco do cliente...");
-      const resCount = await ext.query(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${whereSql}`, params);
+      const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${whereSql}`, params);
       const cRaw = resCount.rows?.[0]?.c;
       const n = Number(cRaw);
       if (Number.isFinite(n) && n >= 0) totalRows = n;
@@ -181,7 +234,7 @@ async function main() {
     __stage = "fetch_and_process";
     for (let offset = 0; ; offset += BATCH_SIZE) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await ext.query(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
+      const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
       const batch = (res.rows ?? []) as Record<string, any>[];
       fetched += batch.length;
       logProgress("fetch");
@@ -193,6 +246,9 @@ async function main() {
       const batchTaxIds = Array.from(new Set(batch.map((r) => String(applyFieldMapping(fields.tax_id, r) ?? "").trim()).filter(Boolean)));
       const batchRepExternalIds = Array.from(
         new Set(batch.map((r) => String(applyFieldMapping(fields.representative_id, r) ?? "").trim()).filter(Boolean)),
+      );
+      const batchGroupExternalIds = Array.from(
+        new Set(batch.map((r) => String(applyFieldMapping((fields as any).group_id, r) ?? "").trim()).filter(Boolean)),
       );
 
       __stage = "load_existing_customers_batch";
@@ -241,10 +297,10 @@ async function main() {
             const legacy = await customerRepo
               .createQueryBuilder("c")
               .where("c.company_id = :companyId", { companyId: company.id })
-              .andWhere("c.external_id IN (:...ids)", { ids })
+              .andWhere("c.tax_id IN (:...ids)", { ids })
               .getMany();
             for (const c of legacy) {
-              const key = String(c.externalId ?? "").trim();
+              const key = String(c.taxId ?? "").trim();
               if (key) legacyByTaxId.set(key, c);
             }
           } catch (err) {
@@ -257,10 +313,10 @@ async function main() {
               const legacy = await customerRepoRetry
                 .createQueryBuilder("c")
                 .where("c.company_id = :companyId", { companyId: company.id })
-                .andWhere("c.external_id IN (:...ids)", { ids })
+                .andWhere("c.tax_id IN (:...ids)", { ids })
                 .getMany();
               for (const c of legacy) {
-                const key = String(c.externalId ?? "").trim();
+                const key = String(c.taxId ?? "").trim();
                 if (key) legacyByTaxId.set(key, c);
               }
               continue;
@@ -325,6 +381,43 @@ async function main() {
         }
       }
 
+      const groupByExternalId = new Map<string, CustomersGroup>();
+      if (batchGroupExternalIds.length) {
+        for (const ids of chunkArray(batchGroupExternalIds, 200)) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const groups = await groupRepo
+              .createQueryBuilder("g")
+              .where("g.company_id = :companyId", { companyId: company.id })
+              .andWhere("g.external_id IN (:...ids)", { ids })
+              .getMany();
+            for (const g of groups) {
+              const key = String(g.externalId ?? "").trim();
+              if (key) groupByExternalId.set(key, g);
+            }
+          } catch (err) {
+            if (isConnectionTerminatedError(err)) {
+              console.warn("[databaseB2b:customers] conexão interna caiu; reiniciando e tentando novamente (groupByExternalId)...");
+              // eslint-disable-next-line no-await-in-loop
+              await resetInternalDbConnection();
+              const groupRepoRetry = AppDataSource.getRepository(CustomersGroup);
+              // eslint-disable-next-line no-await-in-loop
+              const groups = await groupRepoRetry
+                .createQueryBuilder("g")
+                .where("g.company_id = :companyId", { companyId: company.id })
+                .andWhere("g.external_id IN (:...ids)", { ids })
+                .getMany();
+              for (const g of groups) {
+                const key = String(g.externalId ?? "").trim();
+                if (key) groupByExternalId.set(key, g);
+              }
+              continue;
+            }
+            throw err;
+          }
+        }
+      }
+
       __stage = "transform_batch";
       const toSaveByExternal = new Map<string, Customer>();
       const seenExternalIds = new Set<string>();
@@ -338,21 +431,21 @@ async function main() {
         if (seenExternalIds.has(externalId)) duplicatedExternalIdInBatch += 1;
         seenExternalIds.add(externalId);
 
-        const taxId = String(applyFieldMapping(fields.tax_id, row) ?? "").trim();
-        if (!taxId) {
-          skippedMissingTaxId += 1;
-          continue;
-        }
+        const taxIdRaw = String(applyFieldMapping(fields.tax_id, row) ?? "").trim();
+        if (!taxIdRaw) skippedMissingTaxId += 1;
+        // Chave de upsert é external_id; tax_id é preenchido quando vier na fonte, senão mantém existente ou vazio
+        const taxId = taxIdRaw || "";
 
         let customer = toSaveByExternal.get(externalId) ?? existingByExternalId.get(externalId) ?? null;
-        if (!customer) {
+        if (!customer && taxIdRaw) {
           // compat: se já existia cliente antigo chaveado por taxId, anexamos externalId agora
-          customer = legacyByTaxId.get(taxId) ?? null;
+          customer = legacyByTaxId.get(taxIdRaw) ?? null;
         }
-        if (!customer) customer = customerRepo.create({ company, externalId, taxId });
+        if (!customer) customer = customerRepo.create({ company, externalId, taxId: taxId || externalId });
 
         customer.company = company;
-        customer.taxId = taxId;
+        // Atualiza tax_id só se veio na fonte; senão mantém o que já tinha (update por external_id)
+        customer.taxId = taxId || (customer.taxId ?? "") || externalId;
         customer.externalId = externalId;
         customer.internalCod = (applyFieldMapping(fields.internal_cod, row) as any) ?? customer.internalCod ?? null;
         customer.legalName = (applyFieldMapping(fields.legal_name, row) as any) ?? customer.legalName ?? null;
@@ -376,6 +469,9 @@ async function main() {
         const repExternal = String(applyFieldMapping(fields.representative_id, row) ?? "").trim();
         if (repExternal) customer.representative = repByLookup.get(repExternal) ?? null;
 
+        const groupExternal = String(applyFieldMapping((fields as any).group_id, row) ?? "").trim();
+        if (groupExternal) customer.customerGroup = groupByExternalId.get(groupExternal) ?? null;
+
         if (phonesMapping) customer.phones = buildPhonesFromCsv(row, phonesMapping) as any;
 
         toSaveByExternal.set(externalId, customer);
@@ -389,7 +485,21 @@ async function main() {
       __stage = "save_batch";
       const toSave = Array.from(toSaveByExternal.values());
       if (toSave.length) {
-        await customerRepo.save(toSave, { chunk: 250 });
+        const t0 = Date.now();
+        try {
+          await customerRepo.save(toSave, { chunk: 250 });
+        } catch (err) {
+          if (isConnectionTerminatedError(err)) {
+            console.warn("[databaseB2b:customers] conexão interna caiu; reiniciando e tentando novamente (save_batch)...");
+            await resetInternalDbConnection();
+            const customerRepoRetry = AppDataSource.getRepository(Customer);
+            await customerRepoRetry.save(toSave, { chunk: 250 });
+          } else {
+            throw err;
+          }
+        }
+        const dt = Date.now() - t0;
+        if (dt > 3000) console.log(`[databaseB2b:customers] save batch size=${toSave.length} took=${dt}ms`);
         upserts += toSave.length;
         processed += toSave.length;
         logProgress("process");
@@ -401,9 +511,11 @@ async function main() {
     if (maxSyncedAt) {
       await updateDatabaseB2bLastProcessedAt(args.company, "customers_schema", maxSyncedAt.toISOString());
     }
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
     console.log(
       `[databaseB2b:customers] company=${args.company} customers_upserted=${upserts} skipped_missing_external_id=${skippedMissingExternalId} skipped_missing_tax_id=${skippedMissingTaxId} duplicated_external_id_in_batch=${duplicatedExternalIdInBatch}`,
     );
+    console.log(`[databaseB2b:customers] concluído em ${elapsed}s`);
   } finally {
     await ext.end().catch(() => {});
   }

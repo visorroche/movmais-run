@@ -32,4 +32,8 @@ export class Company {
   @Column({ name: 'sells_on_marketplaces', type: 'boolean', default: true })
   sells_on_marketplaces!: boolean;
 
+  // Dashboard específico (Televendas).
+  @Column({ name: 'televendas', type: 'boolean', default: false })
+  televendas!: boolean;
+
 }

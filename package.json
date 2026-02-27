@@ -18,6 +18,7 @@
     "script:anymarket:orders": "npm run build && node dist/commands/anymarket/anymarketOrders.js",
     "script:databaseb2b:representatives": "npm run build && node dist/commands/databaseB2b/representatives.js",
     "script:databaseb2b:customers": "npm run build && node dist/commands/databaseB2b/customers.js",
+    "script:databaseb2b:customers-groups": "npm run build && node dist/commands/databaseB2b/customersGroups.js",
     "script:databaseb2b:products": "npm run build && node dist/commands/databaseB2b/products.js",
     "script:databaseb2b:orders": "npm run build && node dist/commands/databaseB2b/orders.js",
     "script:fake:company-data": "npm run build && node dist/commands/fake/fakeCompanyData.js",

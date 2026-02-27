@@ -5,6 +5,7 @@ import { Product } from "./Product.js";
 
 @Entity({ name: "order_items" })
 @Index("idx_order_items_product_id", ["product"])
+@Index("idx_order_items_order_id_product_id", ["order", "product"])
 export class OrderItem {
   @PrimaryGeneratedColumn()
   id!: number;

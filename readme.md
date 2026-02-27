@@ -61,6 +61,7 @@ Executa 1 comando por entidade e aplica os tratamentos configurados no mapeament
 
 ```bash
 npm run script:databaseb2b:representatives -- --company=1
+npm run script:databaseb2b:customers-groups -- --company=1
 npm run script:databaseb2b:customers -- --company=1
 npm run script:databaseb2b:products -- --company=1
 npm run script:databaseb2b:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04
