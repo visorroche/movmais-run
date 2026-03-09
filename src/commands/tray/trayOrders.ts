@@ -1145,8 +1145,9 @@ async function main() {
             order.deliveryComplement = pickString(customerObjForOrder, "complement");
           }
 
+          const shipmentStr = pickString(orderObj, "shipment");
           order.tracking = {
-            shipment: pickString(orderObj, "shipment"),
+            shipment: shipmentStr,
             shipment_date: pickString(orderObj, "shipment_date"),
             shipment_integrator: pickString(orderObj, "shipment_integrator"),
             sending_code: pickString(orderObj, "sending_code"),
@@ -1154,6 +1155,21 @@ async function main() {
             access_code: pickString(orderObj, "access_code"),
             is_traceable: pickString(orderObj, "is_traceable"),
           };
+          // carrier / subsidiary: "Logística do vendedor - GBex Express - Normal - Origem: Fortaleza-CE"
+          if (shipmentStr) {
+            const parts = shipmentStr.split(" - ");
+            const origemMatch = shipmentStr.match(/Origem:\s*(.+)/);
+            if (parts.length >= 2 && origemMatch) {
+              order.carrier = parts[1]!.trim();
+              order.subsidiary = origemMatch[1]!.trim();
+            } else {
+              order.carrier = shipmentStr;
+              order.subsidiary = null;
+            }
+          } else {
+            order.carrier = null;
+            order.subsidiary = null;
+          }
 
           order.payments = {
             payment_date: pickString(orderObj, "payment_date"),

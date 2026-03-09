@@ -494,6 +494,25 @@ async function processOrdersPass(opts: {
       order.deliveryDays = diffDaysUtc(order.orderDate ? formatYmdUtc(order.orderDate) : null, promisedYmd);
       order.payments = o.payments ?? null;
       order.tracking = shipping;
+      // carrier / subsidiary: objeto tracking da API ou primeiro item > primeiro shippings
+      const trackingObj = asRecord(o.tracking ?? null);
+      if (trackingObj) {
+        order.carrier = pickString(trackingObj, "carrier");
+        order.subsidiary = pickString(trackingObj, "deliveryMethodName");
+      } else {
+        const itemsArr = ensureArray(o.items);
+        const firstItem = asRecord(itemsArr[0] ?? null);
+        const shippingsArr = firstItem ? ensureArray(firstItem.shippings) : [];
+        const firstShipping = asRecord(shippingsArr[0] ?? null);
+        if (firstShipping) {
+          let carrierVal = pickString(firstShipping, "shippingCarrierNormalized");
+          if (!carrierVal || carrierVal === "UNKNOWN") {
+            carrierVal = pickString(firstShipping, "shippingtype") ?? carrierVal;
+          }
+          order.carrier = carrierVal;
+        }
+        order.subsidiary = null;
+      }
       order.metadata = o.metadata ?? null;
       order.raw = o;
       if (customer) order.customer = customer;

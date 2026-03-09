@@ -254,6 +254,7 @@ async function main() {
         rep.document =
           (applyFieldMapping(fields.document, row) as any) ?? (applyFieldMapping((fields as any).tax_id, row) as any) ?? rep.document ?? null;
         rep.internalCode = (applyFieldMapping((fields as any).internal_code, row) as any) ?? rep.internalCode ?? null;
+        rep.companyName = (applyFieldMapping((fields as any).company_name ?? (fields as any).companyName, row) as any) ?? rep.companyName ?? null;
         rep.category = (applyFieldMapping(fields.category, row) as any) ?? null;
         rep.obs = (applyFieldMapping(fields.obs, row) as any) ?? null;
         rep.createdAt = parseDateOnlyLoose(applyFieldMapping(createdAtMapping, row)) ?? rep.createdAt ?? null;

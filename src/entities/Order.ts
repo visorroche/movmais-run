@@ -86,6 +86,14 @@ export class Order {
   @Column({ type: "varchar", nullable: true })
   deliveryComplement?: string | null; // complemento / complement
 
+  /** Transportadora (ex.: GBex Express, carrier da API). */
+  @Column({ type: "varchar", nullable: true })
+  carrier?: string | null;
+
+  /** Filial / cidade de distribuição (ex.: Fortaleza-CE, deliveryMethodName). */
+  @Column({ type: "varchar", nullable: true })
+  subsidiary?: string | null;
+
   // campos extras / específicos de integrações
   @Column({ type: "jsonb", nullable: true })
   metadata?: unknown;

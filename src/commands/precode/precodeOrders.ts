@@ -413,6 +413,9 @@ async function main() {
       order.storePickup = (detail.retiraLoja ?? null) as unknown;
       order.payments = (detail.pagamento ?? null) as unknown;
       order.tracking = (detail.dadosRastreio ?? null) as unknown;
+      const dadosRastreio = (detail.dadosRastreio ?? {}) as Record<string, unknown>;
+      order.carrier = pickString(dadosRastreio, "transportadora");
+      order.subsidiary = pickString(dadosRastreio, "cidadeDistribuicao");
       order.timeline = (detail.dadosAcompanhamento ?? null) as unknown;
       // raw: payload do pedido "como veio" (somente dados do pedido).
       // Customer.raw guarda o payload do customer integralmente.

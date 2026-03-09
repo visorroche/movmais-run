@@ -17,6 +17,9 @@ export class Representative {
   @JoinColumn({ name: "company_id" })
   company!: Company;
 
+  @Column({ type: "varchar", nullable: true, name: "company_name" })
+  companyName?: string | null;
+
   @ManyToOne(() => User, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "user_id" })
   user?: User | null;
