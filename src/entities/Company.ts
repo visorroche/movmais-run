@@ -36,4 +36,12 @@ export class Company {
   @Column({ name: 'televendas', type: 'boolean', default: false })
   televendas!: boolean;
 
+  // Dashboard específico (Avanço).
+  @Column({ name: 'avanco', type: 'boolean', default: false })
+  avanco!: boolean;
+
+  // Módulo específico (Operador Logístico).
+  @Column({ name: 'operador_logistico', type: 'boolean', default: false })
+  operador_logistico!: boolean;
+
 }

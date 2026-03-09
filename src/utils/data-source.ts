@@ -22,6 +22,12 @@ import { FreightOrderItem } from "../entities/FreightOrderItem.js";
 import { FreightResume } from "../entities/FreightResume.js";
 import { IntegrationLog } from "../entities/IntegrationLog.js";
 import { Log } from "../entities/Log.js";
+import { AvancoLogisticsOperator } from "../entities/Avanco/AvancoLogisticsOperator.js";
+import { AvancoLogisticsAddress } from "../entities/Avanco/AvancoLogisticsAddress.js";
+import { AvancoLogisticsTablePrice } from "../entities/Avanco/AvancoLogisticsTablePrice.js";
+import { AvancoLogisticOrder } from "../entities/Avanco/AvancoLogisticOrder.js";
+import { AvancoLogisticOrderItem } from "../entities/Avanco/AvancoLogisticOrderItem.js";
+import { City } from "../entities/City.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
 export const AppDataSource = new DataSource({
@@ -70,6 +76,12 @@ export const AppDataSource = new DataSource({
     FreightResume,
     IntegrationLog,
     Log,
+    AvancoLogisticsOperator,
+    AvancoLogisticsAddress,
+    AvancoLogisticsTablePrice,
+    AvancoLogisticOrder,
+    AvancoLogisticOrderItem,
+    City,
   ],
   migrations: [],
   subscribers: [],

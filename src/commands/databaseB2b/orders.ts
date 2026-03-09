@@ -210,7 +210,6 @@ async function main() {
   sourceCols.add(requiredItemExternalId);
   if (syncedAtCol) sourceCols.add(syncedAtCol);
 
-  // Para filtrar por data, precisamos saber o nome da coluna do order_date
   const orderDateCol = schemaFieldName(orderFields.order_date);
   const whereParts: string[] = [];
   const params: any[] = [];
@@ -223,11 +222,15 @@ async function main() {
     whereParts.push(`${quoteIdent(orderDateCol)} <= $${params.length}`);
   }
   const dateWhereSql = whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : "";
+  const orderCodeCol = schemaFieldName(orderFields.order_code);
 
   const colsSql = sourceCols.size ? Array.from(sourceCols).map(quoteIdent).join(", ") : "*";
 
   const range = args.startDate || args.endDate ? ` range=${args.startDate ?? ""}..${args.endDate ?? ""}` : "";
   const onlyInsertLog = args.onlyInsert ? " onlyInsert=true" : "";
+  console.log(
+    `[databaseB2b:orders] schema colunas mapeadas order_date=${orderDateCol || "(vazio)"} order_code=${orderCodeCol || "(vazio)"} external_id=${requiredOrderExternalId}`,
+  );
   console.log(
     `[databaseB2b:orders] iniciado company=${args.company}${range}${onlyInsertLog} platform=${meta?.platformSlug ?? "?"} table=${table} singleTable=${
       singleTable ? "true" : "false"
@@ -276,11 +279,27 @@ async function main() {
     // - Update: só atualizar se synced_at do cliente for maior que lastProcessedAt (evita sobrescrever com dado antigo).
     __stage = "fetch_external";
     let expectedRowCount: number | null = null;
+    let expectedDistinctOrderCode: number | null = null;
     try {
       const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`, params);
       const cRaw = (resCount.rows ?? [])?.[0]?.c;
       const n = Number(cRaw);
       if (Number.isFinite(n) && n >= 0) expectedRowCount = n;
+      console.log(`[databaseB2b:orders] fetch COUNT(*) no cliente (mesmo WHERE): ${expectedRowCount ?? "erro"}`);
+      if (orderCodeCol && expectedRowCount != null) {
+        try {
+          const resDistinct = await externalQuery(
+            `SELECT COUNT(DISTINCT ${quoteIdent(orderCodeCol)})::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`,
+            params,
+          );
+          const dRaw = (resDistinct.rows ?? [])?.[0]?.c;
+          const d = Number(dRaw);
+          if (Number.isFinite(d) && d >= 0) expectedDistinctOrderCode = d;
+          console.log(`[databaseB2b:orders] fetch COUNT(DISTINCT ${orderCodeCol}) no cliente: ${expectedDistinctOrderCode ?? "erro"}`);
+        } catch {
+          // ignora se coluna não existir ou falhar
+        }
+      }
     } catch {
       expectedRowCount = null;
     }
@@ -300,7 +319,12 @@ async function main() {
       );
     };
 
-    const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${dateWhereSql}`;
+    // ORDER BY garante ordem determinística: sem isso LIMIT/OFFSET podem retornar conjuntos diferentes entre batches e perder linhas.
+    const orderByCol = requiredItemExternalId || orderCodeCol || "1";
+    const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${dateWhereSql} ORDER BY ${quoteIdent(orderByCol)}`;
+    // Query exata para reproduzir no banco do cliente (substitua $1, $2, ... pelos params abaixo)
+    console.log("[databaseB2b:orders] query fetch:", sqlBase);
+    console.log("[databaseB2b:orders] params:", JSON.stringify(params));
     for (let offset = 0; ; offset += BATCH_SIZE) {
       // eslint-disable-next-line no-await-in-loop
       const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
@@ -312,10 +336,27 @@ async function main() {
     }
 
     __stage = "group_rows";
+    // Diagnóstico: distinct por chave bruta da linha (evita dúvida de applyFieldMapping/keys do driver)
+    const distinctCodigoPedidoRaw = new Set<string>();
+    for (const row of rows) {
+      const raw = row[orderCodeCol] ?? row["codigo_pedido"];
+      if (raw != null && String(raw).trim() !== "") distinctCodigoPedidoRaw.add(String(raw).trim());
+    }
+    console.log(
+      `[databaseB2b:orders] após fetch distinct codigo_pedido (raw key "${orderCodeCol}"): ${distinctCodigoPedidoRaw.size} (esperado pelo COUNT no cliente: ${expectedDistinctOrderCode ?? "?"})`,
+    );
+
     const groups = new Map<string, Record<string, any>[]>();
+    let rowsSkippedNoExternalId = 0;
+    const distinctOrderCodeInRows = new Set<number>();
     for (const row of rows) {
       const externalId = String(applyFieldMapping((orderFields as any).external_id, row) ?? "").trim();
-      if (!externalId) continue;
+      const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, row));
+      if (orderCode) distinctOrderCodeInRows.add(orderCode);
+      if (!externalId) {
+        rowsSkippedNoExternalId++;
+        continue;
+      }
       const list = groups.get(externalId) ?? [];
       list.push(row);
       groups.set(externalId, list);
@@ -323,7 +364,27 @@ async function main() {
 
     const totalOrders = groups.size;
     const totalRows = rows.length;
-    console.log(`[databaseB2b:orders] carregado do cliente rows=${totalRows} orders=${totalOrders}`);
+    let minOrderDate: string | null = null;
+    let maxOrderDate: string | null = null;
+    for (const row of rows) {
+      const d = applyFieldMapping(orderFields.order_date, row);
+      const s = d != null ? String(d).trim() : "";
+      if (s) {
+        if (minOrderDate == null || s < minOrderDate) minOrderDate = s;
+        if (maxOrderDate == null || s > maxOrderDate) maxOrderDate = s;
+      }
+    }
+    let groupsWithNoOrderCode = 0;
+    for (const [, orderRows] of groups.entries()) {
+      const first = orderRows[0];
+      if (first && !toIntLoose(applyFieldMapping(orderFields.order_code, first))) groupsWithNoOrderCode++;
+    }
+    console.log(
+      `[databaseB2b:orders] carregado do cliente rows=${totalRows} orders=${totalOrders} distinct_order_code=${distinctOrderCodeInRows.size} rows_sem_external_id=${rowsSkippedNoExternalId} grupos_sem_order_code=${groupsWithNoOrderCode}`,
+    );
+    console.log(
+      `[databaseB2b:orders] group_rows order_date min=${minOrderDate ?? "n/a"} max=${maxOrderDate ?? "n/a"}`,
+    );
 
     // Vinculações (customer / representatives) via lookupField configurável no front
     const customerLookupField = normalizeCustomerLookupField(getMappingLookupField((orderFields as any).customer_id, "external_id"));
@@ -366,6 +427,9 @@ async function main() {
         if (sku) skuVals.add(String(sku));
       }
     }
+    console.log(
+      `[databaseB2b:orders] lookup vals a buscar customers=${customerLookupVals.size} reps=${repLookupVals.size} assistants=${assistantLookupVals.size} supervisors=${supervisorLookupVals.size} products=${productLookupVals.size} skus=${skuVals.size}`,
+    );
 
     const customerColSql: Record<CustomerLookupField, string> = {
       external_id: "external_id",
@@ -595,6 +659,9 @@ async function main() {
     const supervisorsByLookup = await getRepsMap(supervisorLookupField);
     const productsByLookup = await fetchProductsByLookup(Array.from(productLookupVals));
     const productsBySku = await fetchProductsBySku(Array.from(skuVals));
+    console.log(
+      `[databaseB2b:orders] lookup carregados customers=${customersByLookup.size}/${customerLookupVals.size} reps=${repsByLookup.size} assistants=${assistantsByLookup.size} supervisors=${supervisorsByLookup.size} products=${productsByLookup.size}/${productLookupVals.size} productsBySku=${productsBySku.size}/${skuVals.size}`,
+    );
 
     // A partir daqui, use repositórios "fresh" (podemos ter dado reset na conexão acima)
     let orderRepoNow = AppDataSource.getRepository(Order);
@@ -638,6 +705,9 @@ async function main() {
           if (key) existingOrdersByExternalId.set(key, o);
         }
       }
+      console.log(
+        `[databaseB2b:orders] orders existentes por external_id: ${existingOrdersByExternalId.size} (de ${orderExternalIds.length} incoming)`,
+      );
     }
 
     const legacyOrdersByOrderCode = new Map<number, Order>();
@@ -673,6 +743,9 @@ async function main() {
           if (Number.isFinite(code)) legacyOrdersByOrderCode.set(code, o);
         }
       }
+      console.log(
+        `[databaseB2b:orders] orders existentes por order_code: ${legacyOrdersByOrderCode.size} (de ${orderCodesList.length} códigos)`,
+      );
     }
 
     const incomingItemExternalIds = Array.from(
@@ -714,11 +787,15 @@ async function main() {
           if (key) existingItemsByExternalId.set(key, it);
         }
       }
+      console.log(
+        `[databaseB2b:orders] itens existentes por external_id: ${existingItemsByExternalId.size} (de ${incomingItemExternalIds.length} incoming)`,
+      );
     }
 
     let processedOrders = 0;
     let processedItems = 0;
     let skippedExisting = 0;
+    let iterated = 0;
     let maxSyncedAt: Date | null = null;
     let lastCompletedSyncedAt: Date | null = null;
     let lastLogAt = 0;
@@ -728,9 +805,10 @@ async function main() {
       if (now - lastLogAt < 1500) return;
       lastLogAt = now;
       const pct = totalOrders ? Math.min(100, Math.round((processedOrders / totalOrders) * 100)) : 100;
+      const iterPct = totalOrders ? Math.min(100, Math.round((iterated / totalOrders) * 100)) : 100;
       const elapsed = Math.round((now - startedAt) / 1000);
       console.log(
-        `[databaseB2b:orders] process orders=${processedOrders}/${totalOrders} (${pct}%) items=${processedItems} skipped_existing=${skippedExisting} elapsed=${elapsed}s`,
+        `[databaseB2b:orders] process iterated=${iterated}/${totalOrders} (${iterPct}%) saved=${processedOrders} items=${processedItems} skipped=${skippedExisting} elapsed=${elapsed}s`,
       );
     };
 
@@ -760,7 +838,181 @@ async function main() {
       return { orderExternalId, orderRows, groupSyncedAt };
     });
     entries.sort((a, b) => (a.groupSyncedAt?.getTime() ?? 0) - (b.groupSyncedAt?.getTime() ?? 0));
+    console.log(
+      `[databaseB2b:orders] entries para processar: ${entries.length} useBulkForce=${Boolean(args.force && args.startDate && args.endDate) && entries.length > 0}`,
+    );
 
+    const useBulkForce =
+      Boolean(args.force && args.startDate && args.endDate) &&
+      entries.length > 0;
+    if (useBulkForce) {
+      __stage = "bulk_delete_orders_in_range";
+      const startDateStr = String(args.startDate);
+      const endDateStr = String(args.endDate);
+      const endOfDayStr = endDateStr + " 23:59:59.999";
+      const orderIdsInRange = await orderRepoNow
+        .createQueryBuilder("o")
+        .select("o.id")
+        .where("o.company_id = :companyId", { companyId: company.id })
+        .andWhere("o.order_date >= :start", { start: startDateStr })
+        .andWhere("o.order_date <= :end", { end: endOfDayStr })
+        .getMany();
+      const ids = orderIdsInRange.map((o) => (o as any).id).filter((id: number) => Number.isFinite(id));
+      console.log(
+        `[databaseB2b:orders] bulk delete pedidos no período ${startDateStr}..${endDateStr}: ${ids.length} ids a remover`,
+      );
+      if (ids.length > 0) {
+        await itemRepoNow.createQueryBuilder().delete().where("order_id IN (:...ids)", { ids }).execute();
+        await orderRepoNow.createQueryBuilder().delete().where("id IN (:...ids)", { ids }).execute();
+        console.log(`[databaseB2b:orders] bulk delete executado: ${ids.length} pedidos removidos`);
+      }
+
+      __stage = "bulk_build_orders";
+      const hasTotalAmountMapping = Boolean(schemaFieldName((orderFields as any).total_amount).trim());
+      const ordersWithRows: { order: Order; orderRows: Record<string, any>[] }[] = [];
+      let bulkSkippedNoOrderCode = 0;
+      for (const { orderExternalId, orderRows } of entries) {
+        const first = orderRows[0]!;
+        const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, first));
+        if (!orderCode) {
+          bulkSkippedNoOrderCode++;
+          continue;
+        }
+        const order = orderRepoNow.create({ company, orderCode });
+        order.externalId = orderExternalId;
+        order.orderCode = orderCode;
+        order.company = company;
+        if (platform) order.platform = platform;
+        order.channel = "offline";
+        order.orderDate = parseTimestamp(applyFieldMapping(orderFields.order_date, first)) ?? null;
+        order.paymentDate = parseDateOnlyLoose(applyFieldMapping(orderFields.payment_date, first)) ?? null;
+        order.deliveryDate = parseDateOnlyLoose(applyFieldMapping(orderFields.delivery_date, first)) ?? null;
+        order.deliveryDays = toIntLoose(applyFieldMapping(orderFields.delivery_days, first)) ?? null;
+        order.discountCoupon = (applyFieldMapping(orderFields.discount_coupon, first) as any) ?? null;
+        order.totalDiscount = (applyFieldMapping(orderFields.total_discount, first) as any) ?? null;
+        order.shippingAmount = (applyFieldMapping(orderFields.shipping_amount, first) as any) ?? null;
+        if (hasTotalAmountMapping) {
+          order.totalAmount = (applyFieldMapping(orderFields.total_amount, first) as any) ?? null;
+        } else {
+          let sum = 0;
+          let used = 0;
+          for (const r of orderRows) {
+            const q = toIntLoose(applyFieldMapping(itemFields.quantity, r));
+            const pRaw = applyFieldMapping(itemFields.unit_price, r);
+            const p = toNumberLoose(pRaw);
+            if (q == null || p == null) continue;
+            sum += q * (Math.round(p * 100) / 100);
+            used += 1;
+          }
+          if (used > 0) order.totalAmount = sum.toFixed(2);
+        }
+        order.currentStatus = (applyFieldMapping(orderFields.current_status, first) as any) ?? null;
+        order.currentStatusCode = (applyFieldMapping(orderFields.current_status_code, first) as any) ?? null;
+        order.deliveryState = (applyFieldMapping(orderFields.delivery_state, first) as any) ?? null;
+        order.deliveryCity = (applyFieldMapping(orderFields.delivery_city, first) as any) ?? null;
+        order.deliveryNeighborhood = (applyFieldMapping(orderFields.delivery_neighborhood, first) as any) ?? null;
+        order.deliveryZip = (applyFieldMapping(orderFields.delivery_zip, first) as any) ?? null;
+        order.deliveryNumber = (applyFieldMapping(orderFields.delivery_number, first) as any) ?? null;
+        order.deliveryAddress = (applyFieldMapping(orderFields.delivery_address, first) as any) ?? null;
+        order.deliveryComplement = (applyFieldMapping(orderFields.delivery_complement, first) as any) ?? null;
+        if (!singleTable) order.metadata = (applyFieldMapping(orderFields.metadata, first) as any) ?? null;
+        const customerKey = String(applyFieldMapping(orderFields.customer_id, first) ?? "").trim();
+        if (customerKey) {
+          const c = customersByLookup.get(customerKey);
+          if (c) order.customer = c;
+        }
+        const repKey = String(applyFieldMapping(orderFields.representative_id, first) ?? "").trim();
+        if (repKey) {
+          const r = repsByLookup.get(repKey);
+          if (r) order.representative = r;
+        }
+        ordersWithRows.push({ order, orderRows });
+      }
+      console.log(
+        `[databaseB2b:orders] bulk build orders: ${ordersWithRows.length} pedidos montados (ignorados order_code vazio: ${bulkSkippedNoOrderCode})`,
+      );
+
+      __stage = "bulk_insert_orders";
+      const ORDER_CHUNK = 400;
+      for (let i = 0; i < ordersWithRows.length; i += ORDER_CHUNK) {
+        const chunk = ordersWithRows.slice(i, i + ORDER_CHUNK).map((x) => x.order);
+        await orderRepoNow.save(chunk, { chunk: ORDER_CHUNK });
+        if (i + ORDER_CHUNK < ordersWithRows.length) {
+          console.log(`[databaseB2b:orders] bulk orders inseridos ${Math.min(i + ORDER_CHUNK, ordersWithRows.length)}/${ordersWithRows.length}`);
+        }
+      }
+      console.log(`[databaseB2b:orders] bulk orders inseridos ${ordersWithRows.length} pedidos`);
+
+      __stage = "bulk_build_items";
+      const hasItemTypeMapping = Boolean(schemaFieldName(itemFields.item_type).trim());
+      const allItems: OrderItem[] = [];
+      let bulkItemsSkippedNoExternalId = 0;
+      for (const { order, orderRows } of ordersWithRows) {
+        for (const row of orderRows) {
+          const itemExternalId = String(applyFieldMapping((itemFields as any).external_id, row) ?? "").trim();
+          if (!itemExternalId) {
+            bulkItemsSkippedNoExternalId++;
+            continue;
+          }
+          const productKey = String(applyFieldMapping((itemFields as any).product_id, row) ?? "").trim();
+          const productByKey = productKey ? productsByLookup.get(productKey) ?? null : null;
+          const sku = toIntLoose(applyFieldMapping(itemFields.sku, row));
+          const product = productByKey ?? (sku ? productsBySku.get(String(sku)) ?? null : null);
+          const item = itemRepoNow.create({ company, order, externalId: itemExternalId });
+          item.company = company;
+          item.order = order;
+          item.externalId = itemExternalId;
+          item.sku = sku ?? null;
+          item.product = product ?? null;
+          item.unitPrice = toNumericStringFixed(applyFieldMapping(itemFields.unit_price, row), 2);
+          item.netUnitPrice = toNumericStringFixed(applyFieldMapping(itemFields.net_unit_price, row), 2);
+          item.quantity = toIntLoose(applyFieldMapping(itemFields.quantity, row)) ?? null;
+          item.itemType = hasItemTypeMapping ? ((applyFieldMapping(itemFields.item_type, row) as any) ?? null) : "produto";
+          item.serviceRefSku = (applyFieldMapping(itemFields.service_ref_sku, row) as any) ?? null;
+          item.comission = (applyFieldMapping(itemFields.comission, row) as any) ?? "0";
+          item.assistantComission = (applyFieldMapping(itemFields.assistant_comission, row) as any) ?? "0";
+          item.supervisorComission = (applyFieldMapping(itemFields.supervisor_comission, row) as any) ?? "0";
+          item.metadata = (applyFieldMapping(itemFields.metadata, row) as any) ?? null;
+          allItems.push(item);
+        }
+      }
+
+      if (bulkSkippedNoOrderCode > 0) {
+        console.log(`[databaseB2b:orders] bulk ignorados por order_code vazio/nulo: ${bulkSkippedNoOrderCode} grupos`);
+      }
+      if (bulkItemsSkippedNoExternalId > 0) {
+        console.log(`[databaseB2b:orders] bulk itens ignorados por external_id vazio: ${bulkItemsSkippedNoExternalId} linhas`);
+      }
+      console.log(`[databaseB2b:orders] bulk build items: ${allItems.length} itens a inserir`);
+
+      __stage = "bulk_insert_items";
+      const ITEM_CHUNK = 2000;
+      for (let i = 0; i < allItems.length; i += ITEM_CHUNK) {
+        const chunk = allItems.slice(i, i + ITEM_CHUNK);
+        await itemRepoNow.save(chunk, { chunk: ITEM_CHUNK });
+        if (i + ITEM_CHUNK < allItems.length) {
+          console.log(`[databaseB2b:orders] bulk itens inseridos ${Math.min(i + ITEM_CHUNK, allItems.length)}/${allItems.length}`);
+        }
+      }
+      console.log(`[databaseB2b:orders] bulk itens inseridos ${allItems.length} itens`);
+
+      let bulkMaxSyncedAt: Date | null = null;
+      if (syncedAtMapping) {
+        for (const { orderRows, groupSyncedAt } of entries) {
+          if (groupSyncedAt && (!bulkMaxSyncedAt || groupSyncedAt.getTime() > bulkMaxSyncedAt.getTime())) {
+            bulkMaxSyncedAt = groupSyncedAt;
+          }
+        }
+      }
+      if (bulkMaxSyncedAt) {
+        await updateDatabaseB2bLastProcessedAt(args.company, "orders_schema", bulkMaxSyncedAt.toISOString());
+      }
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      console.log(
+        `[databaseB2b:orders] concluído company=${args.company}${range} orders_processed=${ordersWithRows.length} items_processed=${allItems.length} (bulk) elapsed=${elapsed}s`,
+      );
+    } else {
+    console.log(`[databaseB2b:orders] modo incremental: processando ${entries.length} grupos (um a um)`);
     const loadOrderByOrderCode = async (orderCode: number): Promise<Order | null> => {
       try {
         return await orderRepoNow.findOne({ where: { company: { id: company.id }, orderCode } as any });
@@ -774,6 +1026,7 @@ async function main() {
     };
 
     for (const { orderExternalId, orderRows, groupSyncedAt } of entries) {
+      iterated += 1;
       const first = orderRows[0]!;
 
       const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, first));
@@ -789,11 +1042,19 @@ async function main() {
       }
       if (args.onlyInsert && (existing || legacy)) {
         skippedExisting += 1;
+        logProgress();
         continue;
       }
-      // Update só quando synced_at do cliente for mais recente; insert sempre.
-      if ((existing || legacy) && lastProcessedAt && groupSyncedAt && groupSyncedAt.getTime() <= lastProcessedAt.getTime()) {
+      // Com --force reprocessa tudo; sem --force, update só quando synced_at do cliente for mais recente.
+      if (
+        !args.force &&
+        (existing || legacy) &&
+        lastProcessedAt &&
+        groupSyncedAt &&
+        groupSyncedAt.getTime() <= lastProcessedAt.getTime()
+      ) {
         skippedExisting += 1;
+        logProgress();
         continue;
       }
       let order = existing ?? legacy ?? orderRepoNow.create({ company, orderCode });
@@ -1020,6 +1281,7 @@ async function main() {
     console.log(
       `[databaseB2b:orders] concluído company=${args.company}${range} orders_processed=${processedOrders} items_processed=${processedItems} skipped_existing=${skippedExisting}${onlyInsertLog} elapsed=${elapsed}s`,
     );
+    }
   } finally {
     await ext.end().catch(() => {});
   }
