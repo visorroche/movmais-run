@@ -15,5 +15,8 @@ export class AvancoLogisticsOperator {
 
   @Column({ name: "mov_comission_order", type: "numeric", nullable: true })
   movComissionOrder?: string | null;
+
+  @Column({ type: "varchar", nullable: true })
+  slug?: string | null;
 }
 

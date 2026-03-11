@@ -11,6 +11,9 @@ import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapPrecodeStatus } from "../../utils/status/index.js";
+import { AvancoLogisticsOperator } from "../../entities/Avanco/AvancoLogisticsOperator.js";
+import { AvancoStock } from "../../entities/Avanco/AvancoStock.js";
+import { AvancoStockMov } from "../../entities/Avanco/AvancoStockMov.js";
 import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
 import { toGender } from "../../utils/gender.js";
@@ -496,6 +499,74 @@ async function main() {
         });
         // eslint-disable-next-line no-await-in-loop
         await itemRepo.save(item);
+      }
+
+      // Avanco stock: se carrier = slug do operador, debitar; se pedido cancelado, reverter movimentações
+      const operatorRepo = AppDataSource.getRepository(AvancoLogisticsOperator);
+      const stockRepo = AppDataSource.getRepository(AvancoStock);
+      const movRepo = AppDataSource.getRepository(AvancoStockMov);
+      const orderIdStr = String(order.id);
+      const companyOriginId = companyRef.id;
+
+      if (order.currentStatus === "cancelado") {
+        const movs = await movRepo.find({
+          where: { type: "order" as const, typeId: orderIdStr },
+        });
+        for (const mov of movs) {
+          const stock = await stockRepo.findOne({ where: { id: mov.avancoStockId } });
+          if (stock) {
+            // quantity na mov é negativa; devolver = somar o valor absoluto
+            stock.quantity = (stock.quantity ?? 0) + Math.abs(mov.quantity);
+            await stockRepo.save(stock);
+          }
+          await movRepo.remove(mov);
+        }
+      } else if (order.carrier && String(order.carrier).trim()) {
+        const carrierSlug = String(order.carrier).trim();
+        const operator = await operatorRepo.findOne({ where: { slug: carrierSlug } });
+        if (operator) {
+          const savedItems = await itemRepo.find({
+            where: { order: { id: order.id } },
+            relations: ["product"],
+          });
+          // Agrupa por product_id: uma mov por (order, stock) com quantidade total
+          const qtyByProduct = new Map<number, number>();
+          for (const oi of savedItems) {
+            const productId = oi.product?.id ?? null;
+            const qty = Math.max(0, Math.floor(Number(oi.quantity) ?? 0));
+            if (productId == null || qty <= 0) continue;
+            qtyByProduct.set(productId, (qtyByProduct.get(productId) ?? 0) + qty);
+          }
+          for (const [productId, totalQty] of qtyByProduct) {
+            const stock = await stockRepo.findOne({
+              where: {
+                companyOriginId,
+                companyLogisticId: operator.companyId,
+                productId,
+              },
+            });
+            if (!stock) continue;
+
+            const existingMov = await movRepo.findOne({
+              where: {
+                avancoStockId: stock.id,
+                type: "order" as const,
+                typeId: orderIdStr,
+              },
+            });
+            if (existingMov) continue;
+
+            const mov = movRepo.create({
+              avancoStockId: stock.id,
+              quantity: -totalQty,
+              type: "order",
+              typeId: orderIdStr,
+            });
+            await movRepo.save(mov);
+            stock.quantity = (stock.quantity ?? 0) - totalQty;
+            await stockRepo.save(stock);
+          }
+        }
       }
 
       processed += 1;

@@ -48,6 +48,14 @@ function toNumericStringFixed(v: unknown, scale: number): string | null {
   return rounded.toFixed(scale);
 }
 
+function buildRawPayload(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row ?? {})) {
+    out[key] = value === undefined ? null : value;
+  }
+  return out;
+}
+
 async function main() {
   __stage = "parse_args";
   const raw = parseCliKv(process.argv.slice(2));
@@ -473,6 +481,7 @@ async function main() {
         product.ncm = (applyFieldMapping(fields.ncm, row) as any) ?? product.ncm ?? null;
         product.photo = (applyFieldMapping(fields.photo, row) as any) ?? product.photo ?? null;
         product.url = (applyFieldMapping(fields.url, row) as any) ?? product.url ?? null;
+        product.raw = buildRawPayload(row);
 
         const active = toBoolLoose(applyFieldMapping(fields.active, row));
         if (active != null) product.active = active;

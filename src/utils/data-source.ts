@@ -27,6 +27,8 @@ import { AvancoLogisticsAddress } from "../entities/Avanco/AvancoLogisticsAddres
 import { AvancoLogisticsTablePrice } from "../entities/Avanco/AvancoLogisticsTablePrice.js";
 import { AvancoLogisticOrder } from "../entities/Avanco/AvancoLogisticOrder.js";
 import { AvancoLogisticOrderItem } from "../entities/Avanco/AvancoLogisticOrderItem.js";
+import { AvancoStock } from "../entities/Avanco/AvancoStock.js";
+import { AvancoStockMov } from "../entities/Avanco/AvancoStockMov.js";
 import { City } from "../entities/City.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
@@ -81,6 +83,8 @@ export const AppDataSource = new DataSource({
     AvancoLogisticsTablePrice,
     AvancoLogisticOrder,
     AvancoLogisticOrderItem,
+    AvancoStock,
+    AvancoStockMov,
     City,
   ],
   migrations: [],
