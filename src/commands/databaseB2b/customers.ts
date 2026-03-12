@@ -5,7 +5,9 @@ import { AppDataSource } from "../../utils/data-source.js";
 import { Company } from "../../entities/Company.js";
 import { Customer } from "../../entities/Customer.js";
 import { CustomersGroup } from "../../entities/CustomersGroup.js";
+import { Plataform } from "../../entities/Plataform.js";
 import { Representative } from "../../entities/Representative.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { parseCliKv, parseCompanyArg, quoteIdent } from "../../utils/cli.js";
 import {
   loadDatabaseB2bCompanyPlatform,
@@ -87,11 +89,47 @@ async function main() {
   }
 
   const companyRepo = AppDataSource.getRepository(Company);
+  const platformRepo = AppDataSource.getRepository(Plataform);
   const customerRepo = AppDataSource.getRepository(Customer);
   const groupRepo = AppDataSource.getRepository(CustomersGroup);
   const repRepo = AppDataSource.getRepository(Representative);
   const company = await companyRepo.findOne({ where: { id: args.company } });
   if (!company) throw new Error(`Company ${args.company} não encontrada.`);
+  const platform =
+    (await platformRepo.findOne({ where: { slug: "b2b_database" } })) ??
+    (await platformRepo.findOne({ where: { slug: "database_b2b" } })) ??
+    (await platformRepo.findOne({ where: { slug: "databaseb2b" } })) ??
+    (await platformRepo.findOne({ where: { slug: "databaseB2b" } })) ??
+    null;
+
+  let integrationLogId: number | null = null;
+  try {
+    const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+    const started = await integrationLogRepo.save(
+      integrationLogRepo.create({
+        processedAt: new Date(),
+        date: null,
+        company,
+        platform: platform ?? undefined,
+        command: "Clientes" as any,
+        status: "PROCESSANDO",
+        log: {
+          company: args.company,
+          platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+          command: "Clientes",
+          table,
+          force: args.force,
+          incremental: !args.force && Boolean(syncedAtCol && lastProcessedAt),
+          status: "PROCESSANDO",
+          customers_upserted: 0,
+        },
+        errors: null,
+      }),
+    );
+    integrationLogId = started.id;
+  } catch (e) {
+    console.warn("[databaseB2b:customers] falha ao gravar log inicial (PROCESSANDO):", e);
+  }
 
   const schema = cfg.customers_schema;
   const fields = schema.fields ?? {};
@@ -191,7 +229,8 @@ async function main() {
 
   attachExternalErrorHandler();
   __stage = "connect_external_db";
-  await ext.connect();
+  try {
+    await ext.connect();
   try {
     let upserts = 0;
     let skippedMissingTaxId = 0;
@@ -516,8 +555,113 @@ async function main() {
       `[databaseB2b:customers] company=${args.company} customers_upserted=${upserts} skipped_missing_external_id=${skippedMissingExternalId} skipped_missing_tax_id=${skippedMissingTaxId} duplicated_external_id_in_batch=${duplicatedExternalIdInBatch}`,
     );
     console.log(`[databaseB2b:customers] concluído em ${elapsed}s`);
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Clientes",
+              table,
+              force: args.force,
+              incremental: !args.force && Boolean(syncedAtCol && lastProcessedAt),
+              status: "FINALIZADO",
+              customers_upserted: upserts,
+              skipped_missing_external_id: skippedMissingExternalId,
+              skipped_missing_tax_id: skippedMissingTaxId,
+              duplicated_external_id_in_batch: duplicatedExternalIdInBatch,
+              elapsed_s: elapsed,
+            },
+            errors: null as any,
+          },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company,
+            platform: platform ?? undefined,
+            command: "Clientes" as any,
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Clientes",
+              table,
+              force: args.force,
+              incremental: !args.force && Boolean(syncedAtCol && lastProcessedAt),
+              status: "FINALIZADO",
+              customers_upserted: upserts,
+              skipped_missing_external_id: skippedMissingExternalId,
+              skipped_missing_tax_id: skippedMissingTaxId,
+              duplicated_external_id_in_batch: duplicatedExternalIdInBatch,
+              elapsed_s: elapsed,
+            },
+            errors: null,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("[databaseB2b:customers] falha ao finalizar log de integração:", e);
+    }
   } finally {
     await ext.end().catch(() => {});
+  }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Clientes",
+              table,
+              force: args.force,
+              status: "ERRO",
+              stage: __stage,
+            },
+            errors: errorPayload as any,
+          },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company,
+            platform: platform ?? undefined,
+            command: "Clientes" as any,
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Clientes",
+              table,
+              status: "ERRO",
+              stage: __stage,
+            },
+            errors: errorPayload,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("[databaseB2b:customers] falha ao gravar log de erro:", e);
+    }
+    throw err;
   }
 }
 

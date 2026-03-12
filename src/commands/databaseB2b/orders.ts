@@ -9,6 +9,7 @@ import { Customer } from "../../entities/Customer.js";
 import { Representative } from "../../entities/Representative.js";
 import { Product } from "../../entities/Product.js";
 import { Plataform } from "../../entities/Plataform.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { parseOrdersRangeArgs, quoteIdent } from "../../utils/cli.js";
 import {
   loadDatabaseB2bCompanyPlatform,
@@ -188,6 +189,39 @@ async function main() {
     (await platformRepo.findOne({ where: { slug: "databaseB2b" } })) ??
     null;
 
+  let integrationLogId: number | null = null;
+  try {
+    const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+    const started = await integrationLogRepo.save(
+      integrationLogRepo.create({
+        processedAt: new Date(),
+        date: null,
+        company,
+        platform: platform ?? undefined,
+        command: "Pedidos",
+        status: "PROCESSANDO",
+        log: {
+          company: args.company,
+          platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+          command: "Pedidos",
+          table,
+          startDate: args.startDate ?? null,
+          endDate: args.endDate ?? null,
+          onlyInsert: args.onlyInsert ?? false,
+          force: args.force,
+          status: "PROCESSANDO",
+          orders_processed: 0,
+          items_processed: 0,
+          skipped_existing: 0,
+        },
+        errors: null,
+      }),
+    );
+    integrationLogId = started.id;
+  } catch (e) {
+    console.warn("[databaseB2b:orders] falha ao gravar log inicial (PROCESSANDO):", e);
+  }
+
   __stage = "prepare_schema";
   const schema = cfg.orders_schema;
   const orderFields = schema.orderFields ?? {};
@@ -270,7 +304,8 @@ async function main() {
 
   attachExternalErrorHandler();
   __stage = "connect_external_db";
-  await ext.connect();
+  try {
+    await ext.connect();
   try {
     let rows: Record<string, any>[] = [];
 
@@ -1281,9 +1316,120 @@ async function main() {
     console.log(
       `[databaseB2b:orders] concluído company=${args.company}${range} orders_processed=${processedOrders} items_processed=${processedItems} skipped_existing=${skippedExisting}${onlyInsertLog} elapsed=${elapsed}s`,
     );
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Pedidos",
+              table,
+              startDate: args.startDate ?? null,
+              endDate: args.endDate ?? null,
+              onlyInsert: args.onlyInsert ?? false,
+              force: args.force,
+              status: "FINALIZADO",
+              orders_processed: processedOrders,
+              items_processed: processedItems,
+              skipped_existing: skippedExisting,
+              elapsed_s: elapsed,
+            },
+            errors: null as any,
+          },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company,
+            platform: platform ?? undefined,
+            command: "Pedidos",
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Pedidos",
+              table,
+              startDate: args.startDate ?? null,
+              endDate: args.endDate ?? null,
+              onlyInsert: args.onlyInsert ?? false,
+              force: args.force,
+              status: "FINALIZADO",
+              orders_processed: processedOrders,
+              items_processed: processedItems,
+              skipped_existing: skippedExisting,
+              elapsed_s: elapsed,
+            },
+            errors: null,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("[databaseB2b:orders] falha ao finalizar log de integração:", e);
+    }
     }
   } finally {
     await ext.end().catch(() => {});
+  }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Pedidos",
+              table,
+              startDate: args.startDate ?? null,
+              endDate: args.endDate ?? null,
+              onlyInsert: args.onlyInsert ?? false,
+              status: "ERRO",
+              stage: __stage,
+            },
+            errors: errorPayload as any,
+          },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company,
+            platform: platform ?? undefined,
+            command: "Pedidos",
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Pedidos",
+              table,
+              startDate: args.startDate ?? null,
+              endDate: args.endDate ?? null,
+              status: "ERRO",
+              stage: __stage,
+            },
+            errors: errorPayload,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("[databaseB2b:orders] falha ao gravar log de erro:", e);
+    }
+    throw err;
   }
 }
 

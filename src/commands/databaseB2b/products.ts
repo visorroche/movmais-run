@@ -3,8 +3,10 @@ import "reflect-metadata";
 
 import { AppDataSource } from "../../utils/data-source.js";
 import { Company } from "../../entities/Company.js";
+import { Plataform } from "../../entities/Plataform.js";
 import { Product } from "../../entities/Product.js";
 import { Category } from "../../entities/Category.js";
+import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { parseCliKv, parseCompanyArg, quoteIdent } from "../../utils/cli.js";
 import {
   loadDatabaseB2bCompanyPlatform,
@@ -78,10 +80,17 @@ async function main() {
   }
 
   const companyRepo = AppDataSource.getRepository(Company);
+  const platformRepo = AppDataSource.getRepository(Plataform);
   const productRepo = AppDataSource.getRepository(Product);
   const categoryRepo = AppDataSource.getRepository(Category);
   const company = await companyRepo.findOne({ where: { id: args.company } });
   if (!company) throw new Error(`Company ${args.company} não encontrada.`);
+  const platform =
+    (await platformRepo.findOne({ where: { slug: "b2b_database" } })) ??
+    (await platformRepo.findOne({ where: { slug: "database_b2b" } })) ??
+    (await platformRepo.findOne({ where: { slug: "databaseb2b" } })) ??
+    (await platformRepo.findOne({ where: { slug: "databaseB2b" } })) ??
+    null;
 
   __stage = "load_categories_for_auto_mapping";
   const allCategories = await categoryRepo
@@ -149,6 +158,35 @@ async function main() {
       !args.force && syncedAtCol && lastProcessedAt ? "on" : "off"
     } force=${args.force ? "on" : "off"}`,
   );
+
+  let integrationLogId: number | null = null;
+  try {
+    const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+    const started = await integrationLogRepo.save(
+      integrationLogRepo.create({
+        processedAt: new Date(),
+        date: null,
+        company,
+        platform: platform ?? undefined,
+        command: "Produtos" as any,
+        status: "PROCESSANDO",
+        log: {
+          company: args.company,
+          platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+          command: "Produtos",
+          table,
+          force: args.force,
+          incremental: !args.force && Boolean(syncedAtCol && lastProcessedAt),
+          status: "PROCESSANDO",
+          products_upserted: 0,
+        },
+        errors: null,
+      }),
+    );
+    integrationLogId = started.id;
+  } catch (e) {
+    console.warn("[databaseB2b:products] falha ao gravar log inicial (PROCESSANDO):", e);
+  }
 
   const sourceCols = new Set<string>();
   for (const v of Object.values(fields)) {
@@ -294,7 +332,8 @@ async function main() {
 
   attachExternalErrorHandler();
   __stage = "connect_external_db";
-  await ext.connect();
+  try {
+    await ext.connect();
   try {
     let upserts = 0;
     let skippedMissingExternalId = 0;
@@ -531,11 +570,121 @@ async function main() {
     if (maxSyncedAt) {
       await updateDatabaseB2bLastProcessedAt(args.company, "products_schema", maxSyncedAt.toISOString());
     }
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
     console.log(
       `[databaseB2b:products] company=${args.company} products_upserted=${upserts} skipped_missing_external_id=${skippedMissingExternalId} skipped_missing_sku=${skippedMissingSku} duplicated_external_id_in_batch=${duplicatedExternalIdInBatch} duplicated_sku_in_batch=${duplicatedSkuInBatch} skipped_external_id_conflicts=${skippedExternalIdConflicts}`,
     );
+
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Produtos",
+              table,
+              force: args.force,
+              incremental: !args.force && Boolean(syncedAtCol && lastProcessedAt),
+              status: "FINALIZADO",
+              products_upserted: upserts,
+              skipped_missing_external_id: skippedMissingExternalId,
+              skipped_missing_sku: skippedMissingSku,
+              duplicated_external_id_in_batch: duplicatedExternalIdInBatch,
+              duplicated_sku_in_batch: duplicatedSkuInBatch,
+              skipped_external_id_conflicts: skippedExternalIdConflicts,
+              elapsed_s: elapsed,
+            },
+            errors: null as any,
+          },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company,
+            platform: platform ?? undefined,
+            command: "Produtos" as any,
+            status: "FINALIZADO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Produtos",
+              table,
+              force: args.force,
+              incremental: !args.force && Boolean(syncedAtCol && lastProcessedAt),
+              status: "FINALIZADO",
+              products_upserted: upserts,
+              skipped_missing_external_id: skippedMissingExternalId,
+              skipped_missing_sku: skippedMissingSku,
+              duplicated_external_id_in_batch: duplicatedExternalIdInBatch,
+              duplicated_sku_in_batch: duplicatedSkuInBatch,
+              skipped_external_id_conflicts: skippedExternalIdConflicts,
+              elapsed_s: elapsed,
+            },
+            errors: null,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("[databaseB2b:products] falha ao finalizar log de integração:", e);
+    }
   } finally {
     await ext.end().catch(() => {});
+  }
+  } catch (err) {
+    try {
+      const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
+      const errorPayload =
+        err instanceof Error ? { name: err.name, message: err.message, stack: err.stack ?? null } : { message: String(err) };
+      if (integrationLogId) {
+        await integrationLogRepo.update(
+          { id: integrationLogId },
+          {
+            processedAt: new Date(),
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Produtos",
+              table,
+              force: args.force,
+              status: "ERRO",
+              stage: __stage,
+            },
+            errors: errorPayload as any,
+          },
+        );
+      } else {
+        await integrationLogRepo.save(
+          integrationLogRepo.create({
+            processedAt: new Date(),
+            date: null,
+            company,
+            platform: platform ?? undefined,
+            command: "Produtos" as any,
+            status: "ERRO",
+            log: {
+              company: args.company,
+              platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
+              command: "Produtos",
+              table,
+              status: "ERRO",
+              stage: __stage,
+            },
+            errors: errorPayload,
+          }),
+        );
+      }
+    } catch (e) {
+      console.warn("[databaseB2b:products] falha ao gravar log de erro:", e);
+    }
+    throw err;
   }
 }
 
