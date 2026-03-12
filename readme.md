@@ -55,6 +55,12 @@ npm run script:anymarket:products -- --company=1
 npm run script:anymarket:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04
 ```
 
+No comando de pedidos, `--force` repopula os itens a partir da API para todos os pedidos do período: remove os `order_items` atuais e recria com os dados da AnyMarket (útil para corrigir itens faltando ou desatualizados).
+
+```bash
+npm run script:anymarket:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04 --force
+```
+
 ### Database B2B
 
 Executa 1 comando por entidade e aplica os tratamentos configurados no mapeamento (ex.: `mapear_valores`, `limpeza_regex`, `concatenar_campos`, `usar_um_ou_outro`, `mapear_json`).

@@ -439,8 +439,9 @@ async function main() {
         else if (currentExternal !== externalId) skippedExternalIdConflicts += 1;
         product.sku = sku;
         const ecommerceIdRaw = applyFieldMapping(fields.ecommerce_id, row);
-        product.ecommerceId = ecommerceIdRaw == null || String(ecommerceIdRaw).trim() === "" ? null : Number(ecommerceIdRaw);
-        if (product.ecommerceId != null && !Number.isFinite(product.ecommerceId)) product.ecommerceId = null;
+        const ecommerceIdStr =
+          ecommerceIdRaw == null || String(ecommerceIdRaw).trim() === "" ? null : String(ecommerceIdRaw).trim();
+        product.ecommerceId = ecommerceIdStr;
 
         product.ean = (applyFieldMapping(fields.ean, row) as any) ?? product.ean ?? null;
         product.slug = (applyFieldMapping(fields.slug, row) as any) ?? product.slug ?? null;

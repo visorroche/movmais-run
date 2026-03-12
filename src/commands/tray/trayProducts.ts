@@ -283,7 +283,7 @@ async function main() {
 
         entity.company = companyRef;
         entity.sku = sku;
-        entity.ecommerceId = ecommerceId;
+        entity.ecommerceId = String(ecommerceId);
         entity.ean = pickString(prod, "ean");
         entity.slug = pickString(prod, "slug");
         entity.name = pickString(prod, "name");

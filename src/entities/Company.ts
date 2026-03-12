@@ -44,4 +44,7 @@ export class Company {
   @Column({ name: 'operador_logistico', type: 'boolean', default: false })
   operador_logistico!: boolean;
 
+  /** Permite lançar pedidos manualmente na tela de Pedidos (somente admin altera). */
+  @Column({ name: 'launch_orders', type: 'boolean', default: false })
+  launch_orders!: boolean;
 }

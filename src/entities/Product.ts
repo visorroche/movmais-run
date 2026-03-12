@@ -22,9 +22,9 @@ export class Product {
   @Column({ type: "varchar" })
   sku!: string;
 
-  // id do produto no ecommerce (no caso da Tray, é o mesmo `id` retornado no /web_api/products)
-  @Column({ type: "integer", nullable: true })
-  ecommerceId?: number | null;
+  // id do produto no ecommerce (AnyMarket etc. podem retornar ids grandes; armazenar como string)
+  @Column({ type: "varchar", nullable: true })
+  ecommerceId?: string | null;
 
   @Column({ type: "varchar", nullable: true })
   ean?: string | null;
@@ -76,8 +76,8 @@ export class Product {
   @Column({ type: "varchar", nullable: true })
   category?: string | null;
 
-  /** ID da categoria na plataforma externa (Tray, Precode, etc.). */
-  @Column({ type: "integer", nullable: true, name: "external_category_id" })
+  /** ID da categoria na plataforma externa (AnyMarket etc. podem retornar ids > 2^31; usar bigint). */
+  @Column({ type: "bigint", nullable: true, name: "external_category_id" })
   externalCategoryId?: number | null;
 
   /** Vínculo com categoria do nosso banco (tabela categories). */

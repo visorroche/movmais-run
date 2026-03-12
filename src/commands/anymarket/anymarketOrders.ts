@@ -262,12 +262,16 @@ async function withRetry<T>(label: string, fn: () => Promise<T>, maxRetries = 3)
   throw lastErr;
 }
 
-function parseArgs(argv: string[]): { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean } {
+function parseArgs(argv: string[]): { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean; force?: boolean } {
   const raw = new Map<string, string>();
   for (const a of argv) {
     if (!a.startsWith("--")) continue;
     if (a === "--onlyInsert" || a === "--only-insert") {
       raw.set("onlyInsert", "true");
+      continue;
+    }
+    if (a === "--force") {
+      raw.set("force", "true");
       continue;
     }
     const parts = a.slice(2).split("=");
@@ -280,12 +284,14 @@ function parseArgs(argv: string[]): { company?: number; startDate?: string; endD
   const startDate = raw.get("start-date");
   const endDate = raw.get("end-date");
   const onlyInsert = raw.get("onlyInsert") === "true";
+  const force = raw.get("force") === "true";
 
-  const result: { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean } = {};
+  const result: { company?: number; startDate?: string; endDate?: string; onlyInsert?: boolean; force?: boolean } = {};
   if (companyStr) result.company = Number(companyStr);
   if (startDate) result.startDate = startDate;
   if (endDate) result.endDate = endDate;
   if (onlyInsert) result.onlyInsert = true;
+  if (force) result.force = true;
   return result;
 }
 
@@ -311,6 +317,7 @@ async function processOrdersPass(opts: {
   startYmd: string;
   endYmd: string;
   onlyInsert: boolean;
+  force: boolean;
   repos: {
     customerRepo: ReturnType<typeof AppDataSource.getRepository<Customer>>;
     orderRepo: ReturnType<typeof AppDataSource.getRepository<Order>>;
@@ -323,13 +330,14 @@ async function processOrdersPass(opts: {
     inserted: number;
     upserted: number;
     updated: number;
+    orderItemsInserted: number;
     customersCreated: number;
     productsCreated: number;
     failed: number;
   };
   progress: (info: { pass: string; offset: number; total: number | null; processed: number }) => void;
 }): Promise<void> {
-  const { passName, baseUrl, token, company, platform, startYmd, endYmd, onlyInsert, repos, counters, progress } = opts;
+  const { passName, baseUrl, token, company, platform, startYmd, endYmd, onlyInsert, force, repos, counters, progress } = opts;
   const { customerRepo, orderRepo, itemRepo, productRepo } = repos;
 
   const limit = 100;
@@ -401,34 +409,35 @@ async function processOrdersPass(opts: {
       customersByExternalId.set(c.externalId, c);
     }
 
-    // prefetch products por sku string (partnerId/externalId)
-    const skuSet = new Set<string>();
+    // Prefetch products por ecommerce_id (item.product.id na AnyMarket = ecommerceId no nosso Product)
+    const ecommerceIdSet = new Set<string>();
     for (const o of ordersJson) {
       for (const it of ensureArray(o.items)) {
         const item = asRecord(it);
         if (!item) continue;
-        const skuObj = asRecord(item.sku ?? null) ?? {};
         const prodObj = asRecord(item.product ?? null) ?? {};
-        const skuStr =
-          pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId") ?? pickString(prodObj, "externalIdProduct") ?? null;
-        if (skuStr) skuSet.add(String(skuStr));
+        const prodId = pickNumber(prodObj, "id");
+        if (prodId != null) ecommerceIdSet.add(String(prodId));
       }
     }
-    const skuArr = Array.from(skuSet);
-    const existingProductsArr = skuArr.length
+    const ecommerceIdArr = Array.from(ecommerceIdSet);
+    const existingProductsArr = ecommerceIdArr.length
       ? // eslint-disable-next-line no-await-in-loop
-        await withRetry("db find existing products (page)", () =>
-          productRepo.find({ where: { company: { id: company.id }, sku: In(skuArr) } as any }),
+        await withRetry("db find existing products by ecommerceId (page)", () =>
+          productRepo.find({ where: { company: { id: company.id }, ecommerceId: In(ecommerceIdArr) } as any }),
         )
       : [];
-    const productsBySku = new Map<string, Product>();
-    for (const p of existingProductsArr) productsBySku.set(p.sku, p);
+    const productsByEcommerceId = new Map<string, Product>();
+    for (const p of existingProductsArr) {
+      if (p.ecommerceId) productsByEcommerceId.set(p.ecommerceId, p);
+    }
 
     const customersToSave: Customer[] = [];
     const productsToSave: Product[] = [];
     const ordersToInsert: Order[] = [];
     const ordersToUpdate: Order[] = [];
     const itemsToInsert: OrderItem[] = [];
+    const orderIdsToReplaceItems: number[] = [];
 
     for (const o of ordersJson) {
       const orderCode = pickNumber(o, "id");
@@ -520,37 +529,42 @@ async function processOrdersPass(opts: {
       if (!exists) ordersToInsert.push(order);
       else ordersToUpdate.push(order);
 
-      // produtos + itens: somente para inserts do pass "created"
-      if (passName === "created" && !exists) {
+      // Produtos + itens: quando pedido é novo OU quando --force (re-busca itens mesmo para pedidos existentes)
+      if (!exists || force) {
+        if (exists && force && order.id) orderIdsToReplaceItems.push(order.id);
         for (const it of ensureArray(o.items)) {
           const item = asRecord(it);
           if (!item) continue;
           const skuObj = asRecord(item.sku ?? null) ?? {};
           const prodObj = asRecord(item.product ?? null) ?? {};
-          const skuStr =
-            pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId") ?? pickString(prodObj, "externalIdProduct") ?? null;
-          if (!skuStr) continue;
+          const prodId = pickNumber(prodObj, "id");
+          if (prodId == null) continue;
+          const ecommerceIdStr = String(prodId);
 
-          let product = productsBySku.get(skuStr) ?? null;
+          let product = productsByEcommerceId.get(ecommerceIdStr) ?? null;
           const isNewProduct = !product;
-          if (!product) product = productRepo.create({ company, sku: skuStr });
+          if (!product) {
+            const skuFromItem =
+              String(pickNumber(skuObj, "id") ?? pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId") ?? "").trim() ||
+              ecommerceIdStr;
+            product = productRepo.create({ company, sku: skuFromItem, ecommerceId: ecommerceIdStr });
+          }
           product.company = company;
-          product.sku = skuStr;
-          product.ecommerceId = pickNumber(prodObj, "id") ?? product.ecommerceId ?? null;
+          product.ecommerceId = ecommerceIdStr;
           // Não sobrescreve brand/model/category se manual_attributes_locked, mas podemos preencher name/ean/photo quando vazio
           const nameFromItem = pickString(skuObj, "title") ?? pickString(prodObj, "title");
           if (!product.name) product.name = nameFromItem;
           if (!product.ean) product.ean = pickString(skuObj, "ean");
           product.photo = product.photo ?? null;
           product.raw = { product: prodObj, sku: skuObj };
-          productsBySku.set(skuStr, product);
+          productsByEcommerceId.set(ecommerceIdStr, product);
           if (isNewProduct) {
             productsToSave.push(product);
             counters.productsCreated += 1;
           }
 
           const qty = pickNumber(item, "amount");
-          const unit = pickNumber(item, "unit");
+          const unitPriceRaw = pickNumber(item, "sellPrice") ?? pickNumber(item, "unit");
           const totalItem = pickNumber(item, "total");
 
           const oi = itemRepo.create({
@@ -558,13 +572,13 @@ async function processOrdersPass(opts: {
             order,
             product,
             sku: null, // SKU no AnyMarket é string (partnerId), não cabe no campo integer
-            unitPrice: toNumericString(unit),
+            unitPrice: toNumericString(unitPriceRaw),
             netUnitPrice: null,
             quantity: qty,
             itemType: "produto",
             serviceRefSku: null,
           });
-          // Se o total vier e o unit não vier (ou vice-versa), a gente mantém o que der.
+          // Se o total vier e o preço unitário não vier, calcula a partir do total.
           if (!oi.unitPrice && totalItem !== null && qty) oi.unitPrice = toNumericString(totalItem / qty);
           itemsToInsert.push(oi);
         }
@@ -647,11 +661,24 @@ async function processOrdersPass(opts: {
       }
     }
 
-    // itens (somente para inserts deste pass)
+    // Remove itens antigos dos pedidos que estão em refresh (--force)
+    if (orderIdsToReplaceItems.length > 0) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await withRetry(`delete order_items for force refresh (n=${orderIdsToReplaceItems.length})`, () =>
+          itemRepo.createQueryBuilder().delete().from(OrderItem).where("order_id IN (:...ids)", { ids: orderIdsToReplaceItems }).execute(),
+        );
+      } catch (e) {
+        console.error("[anymarket:orders] falha ao remover itens antigos (force); seguindo:", e);
+      }
+    }
+
+    // itens: novos ou repopulados com --force
     if (itemsToInsert.length > 0) {
       try {
         // eslint-disable-next-line no-await-in-loop
         await withRetry(`save order_items batch (n=${itemsToInsert.length})`, () => itemRepo.save(itemsToInsert, { chunk: 50 }));
+        counters.orderItemsInserted += itemsToInsert.length;
       } catch (e) {
         console.error("[anymarket:orders] falha ao salvar order_items batch; seguindo:", e);
       }
@@ -676,6 +703,7 @@ async function main() {
   const startDate = partial.startDate ?? y;
   const endDate = partial.endDate ?? (partial.startDate ? partial.startDate : t);
   const onlyInsert = Boolean(partial.onlyInsert);
+  const force = Boolean(partial.force);
 
   let start = parseIsoDateYmd(startDate);
   let end = parseIsoDateYmd(endDate);
@@ -697,6 +725,7 @@ async function main() {
     inserted: 0,
     upserted: 0,
     updated: 0,
+    orderItemsInserted: 0,
     customersCreated: 0,
     productsCreated: 0,
     failed: 0,
@@ -743,6 +772,7 @@ async function main() {
             startDate: formatYmdUtc(start),
             endDate: formatYmdUtc(end),
             onlyInsert,
+            force,
             status: "PROCESSANDO",
             inserted: 0,
             upserted: 0,
@@ -775,7 +805,7 @@ async function main() {
     const progress = (info: { pass: string; offset: number; total: number | null; processed: number }) => {
       const totalPart = info.total !== null ? `${info.offset}/${info.total}` : `${info.offset}`;
       renderProgress(
-        `[anymarket:orders] company=${companyId} range=${startYmd}..${endYmd} chunk=${currentChunkIndex}/${chunks.length} pass=${info.pass} offset=${totalPart} processed=${counters.processed} inserted=${counters.inserted} updated=${counters.updated} upsert=${counters.upserted}`,
+        `[anymarket:orders] company=${companyId} range=${startYmd}..${endYmd} chunk=${currentChunkIndex}/${chunks.length} pass=${info.pass} offset=${totalPart} processed=${counters.processed} inserted=${counters.inserted} updated=${counters.updated} upsert=${counters.upserted} order_items=${counters.orderItemsInserted}`,
       );
     };
 
@@ -796,6 +826,7 @@ async function main() {
         startYmd: ch.startYmd,
         endYmd: ch.endYmd,
         onlyInsert,
+        force,
         repos: { customerRepo, orderRepo, itemRepo, productRepo },
         counters,
         progress,
@@ -811,6 +842,7 @@ async function main() {
         startYmd: ch.startYmd,
         endYmd: ch.endYmd,
         onlyInsert,
+        force,
         repos: { customerRepo, orderRepo, itemRepo, productRepo },
         counters,
         progress,
@@ -819,7 +851,7 @@ async function main() {
 
     if (IS_TTY) process.stdout.write("\n");
     console.log(
-      `[anymarket:orders] company=${companyId} range=${startYmd}..${endYmd} fetched=${counters.fetched} processed=${counters.processed} inserted=${counters.inserted} upserted=${counters.upserted} updated=${counters.updated} customers_created=${counters.customersCreated} products_created=${counters.productsCreated} failed=${counters.failed}`,
+      `[anymarket:orders] company=${companyId} range=${startYmd}..${endYmd} fetched=${counters.fetched} processed=${counters.processed} inserted=${counters.inserted} upserted=${counters.upserted} updated=${counters.updated} order_items_inserted=${counters.orderItemsInserted} customers_created=${counters.customersCreated} products_created=${counters.productsCreated} failed=${counters.failed}`,
     );
 
     try {
@@ -838,12 +870,14 @@ async function main() {
               endDate: endYmd,
               chunks: chunks.length,
               onlyInsert,
+              force,
               status: "FINALIZADO",
               fetched: counters.fetched,
               processed: counters.processed,
               inserted: counters.inserted,
               upserted: counters.upserted,
               updated: counters.updated,
+              order_items_inserted: counters.orderItemsInserted,
               customers_created: counters.customersCreated,
               products_created: counters.productsCreated,
               failed: counters.failed,
@@ -868,12 +902,14 @@ async function main() {
               endDate: endYmd,
               chunks: chunks.length,
               onlyInsert,
+              force,
               status: "FINALIZADO",
               fetched: counters.fetched,
               processed: counters.processed,
               inserted: counters.inserted,
               upserted: counters.upserted,
               updated: counters.updated,
+              order_items_inserted: counters.orderItemsInserted,
               customers_created: counters.customersCreated,
               products_created: counters.productsCreated,
               failed: counters.failed,
@@ -904,6 +940,7 @@ async function main() {
               inserted: counters.inserted,
               upserted: counters.upserted,
               updated: counters.updated,
+              order_items_inserted: counters.orderItemsInserted,
               fetched: counters.fetched,
               processed: counters.processed,
               customers_created: counters.customersCreated,
@@ -930,6 +967,7 @@ async function main() {
               inserted: counters.inserted,
               upserted: counters.upserted,
               updated: counters.updated,
+              order_items_inserted: counters.orderItemsInserted,
               fetched: counters.fetched,
               processed: counters.processed,
               customers_created: counters.customersCreated,

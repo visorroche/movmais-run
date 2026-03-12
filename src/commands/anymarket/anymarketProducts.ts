@@ -178,6 +178,18 @@ function getNextHref(payload: AnyMarketListResponse): string | null {
   return null;
 }
 
+/** Extrai URL de string de um item do array images (AnyMarket usa "url"). */
+function getImageUrlFromItem(item: Record<string, unknown>): string | null {
+  const url =
+    pickString(item, "url") ??
+    pickString(item, "standardUrl") ??
+    pickString(item, "thumbnailUrl") ??
+    pickString(item, "lowResolutionUrl") ??
+    pickString(item, "originalImage");
+  if (url && url.startsWith("http")) return url;
+  return null;
+}
+
 function pickBestImageUrl(images: unknown): string | null {
   const arr = ensureArray(images);
   const parsed = arr.map((x) => asRecord(x)).filter(Boolean) as Record<string, unknown>[];
@@ -187,13 +199,14 @@ function pickBestImageUrl(images: unknown): string | null {
     parsed[0] ??
     null;
   if (!main) return null;
-  return (
-    pickString(main, "url") ??
-    pickString(main, "standardUrl") ??
-    pickString(main, "thumbnailUrl") ??
-    pickString(main, "lowResolutionUrl") ??
-    pickString(main, "originalImage")
-  );
+  const fromMain = getImageUrlFromItem(main);
+  if (fromMain) return fromMain;
+  // Fallback: primeira imagem do array que tiver URL válida
+  for (const item of parsed) {
+    const u = getImageUrlFromItem(item);
+    if (u) return u;
+  }
+  return null;
 }
 
 async function main() {
@@ -287,7 +300,7 @@ async function main() {
       const rows: Array<{
         product: Record<string, unknown>;
         sku: Record<string, unknown>;
-        skuStr: string;
+        skuIdStr: string;
       }> = [];
 
       for (const item of content) {
@@ -299,11 +312,11 @@ async function main() {
         for (const skuRaw of skusArr) {
           const s = asRecord(skuRaw);
           if (!s) continue;
-          const skuStr =
-            String(pickString(s, "partnerId") ?? pickString(s, "externalId") ?? pickNumber(s, "id") ?? "").trim() || null;
-          if (!skuStr) continue;
-          skuList.push(skuStr);
-          rows.push({ product: p, sku: s, skuStr });
+          const skuId = pickNumber(s, "id");
+          if (skuId == null) continue;
+          const skuIdStr = String(skuId);
+          skuList.push(skuIdStr);
+          rows.push({ product: p, sku: s, skuIdStr });
         }
       }
 
@@ -315,25 +328,32 @@ async function main() {
       const existingBySku = new Map<string, Product>();
       for (const e of existingArr) existingBySku.set(e.sku, e);
 
-      for (const { product: p, sku: s, skuStr } of rows) {
+      for (const { product: p, sku: s, skuIdStr } of rows) {
         const productId = pickNumber(p, "id");
         if (!productId) continue;
 
+        // Payload: brand: { id, name, reducedName, partnerId }, category: { id, name, path }, nbm: { id, description }
         const brandObj = asRecord(p.brand ?? null) ?? {};
         const categoryObj = asRecord(p.category ?? null) ?? {};
         const nbmObj = asRecord((p as any).nbm ?? null) ?? {};
 
-        const refs = splitStoreReference(pickString(s, "partnerId") ?? pickString(s, "externalId") ?? pickString(p, "externalIdProduct"));
+        const refs = splitStoreReference(
+          pickString(s, "partnerId") ?? pickString(s, "externalId") ?? pickString(p, "externalIdProduct"),
+        );
 
         const name = pickString(s, "title") ?? pickString(p, "title");
         const ean = pickString(s, "ean");
-        const photo = pickBestImageUrl((p as any).images);
+        const photo =
+          pickBestImageUrl((p as any).images) ?? pickBestImageUrl((s as any).images);
+        // Preço do SKU: sellPrice (preço de venda) com fallback para price
+        const value = toNumericString(pickNumber(s, "sellPrice") ?? pickNumber(s, "price") ?? pickString(s, "sellPrice") ?? pickString(s, "price"));
 
-        let entity = existingBySku.get(skuStr) ?? productRepo.create({ company: companyRef, sku: skuStr });
+        let entity = existingBySku.get(skuIdStr) ?? productRepo.create({ company: companyRef, sku: skuIdStr });
         entity.company = companyRef;
-        entity.sku = skuStr;
-        entity.ecommerceId = productId;
+        entity.sku = skuIdStr;
+        entity.ecommerceId = productId != null ? String(productId) : null;
         entity.ean = ean;
+        entity.value = value ?? null;
         entity.slug = null;
         entity.name = name;
         entity.storeReference = refs.storeReference;
@@ -342,8 +362,10 @@ async function main() {
         entity.brandId = pickNumber(brandObj, "id");
         if (!entity.manualAttributesLocked) entity.model = pickString(p, "model");
         entity.ncm = pickString(nbmObj, "id");
-        if (!entity.manualAttributesLocked) entity.category = pickString(categoryObj, "path") ?? pickString(categoryObj, "name");
+        if (!entity.manualAttributesLocked)
+          entity.category = pickString(categoryObj, "name") ?? pickString(categoryObj, "path");
         entity.externalCategoryId = pickNumber(categoryObj, "id");
+        // Dimensões e peso no root do produto: weight, length, width, height (números)
         entity.weight = toNumericString(pickNumber(p, "weight") ?? pickString(p, "weight"));
         entity.lengthCm = toNumericString(pickNumber(p, "length") ?? pickString(p, "length"));
         entity.width = toNumericString(pickNumber(p, "width") ?? pickString(p, "width"));

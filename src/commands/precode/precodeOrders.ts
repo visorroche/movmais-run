@@ -523,7 +523,11 @@ async function main() {
         }
       } else if (order.carrier && String(order.carrier).trim()) {
         const carrierSlug = String(order.carrier).trim();
-        const operator = await operatorRepo.findOne({ where: { slug: carrierSlug } });
+        // Busca case-insensitive: Precode pode enviar "Fatelog" e o operador estar cadastrado como "fatelog"
+        const operator = await operatorRepo
+          .createQueryBuilder("op")
+          .where("LOWER(TRIM(op.slug)) = LOWER(:carrier)", { carrier: carrierSlug })
+          .getOne();
         if (operator) {
           const savedItems = await itemRepo.find({
             where: { order: { id: order.id } },
