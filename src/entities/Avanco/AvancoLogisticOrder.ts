@@ -30,6 +30,10 @@ export class AvancoLogisticOrder {
   @Column({ name: "reject_reason", type: "text", nullable: true })
   rejectReason?: string | null;
 
+  /** Quantidade de dias para o produto sair da company e ir para o operador logístico após aprovado. */
+  @Column({ name: "delivery_days", type: "integer", nullable: true })
+  deliveryDays?: number | null;
+
   @Column({ name: "created_at", type: "timestamptz", default: () => "now()" })
   createdAt!: Date;
 }
