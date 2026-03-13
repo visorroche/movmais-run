@@ -189,6 +189,13 @@ async function main() {
     (await platformRepo.findOne({ where: { slug: "databaseB2b" } })) ??
     null;
 
+  __stage = "prepare_schema";
+  const schema = cfg.orders_schema;
+  const orderFields = schema.orderFields ?? {};
+  const itemFields = schema.orderItemFields ?? {};
+
+  const table = schema.table;
+
   let integrationLogId: number | null = null;
   try {
     const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
@@ -197,7 +204,7 @@ async function main() {
         processedAt: new Date(),
         date: null,
         company,
-        platform: platform ?? undefined,
+        platform: platform,
         command: "Pedidos",
         status: "PROCESSANDO",
         log: {
@@ -217,17 +224,10 @@ async function main() {
         errors: null,
       }),
     );
-    integrationLogId = started.id;
+    integrationLogId = Array.isArray(started) ? (started[0]?.id ?? null) : started.id;
   } catch (e) {
     console.warn("[databaseB2b:orders] falha ao gravar log inicial (PROCESSANDO):", e);
   }
-
-  __stage = "prepare_schema";
-  const schema = cfg.orders_schema;
-  const orderFields = schema.orderFields ?? {};
-  const itemFields = schema.orderItemFields ?? {};
-
-  const table = schema.table;
   const singleTable = Boolean(schema.singleTable);
   const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "orders_schema");
   const syncedAtCol = schemaFieldName((orderFields as any).synced_at) || schemaFieldName((itemFields as any).synced_at) || "";
@@ -1349,7 +1349,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Pedidos",
             status: "FINALIZADO",
             log: {
@@ -1409,7 +1409,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Pedidos",
             status: "ERRO",
             log: {

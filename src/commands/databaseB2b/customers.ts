@@ -102,6 +102,14 @@ async function main() {
     (await platformRepo.findOne({ where: { slug: "databaseB2b" } })) ??
     null;
 
+  const schema = cfg.customers_schema;
+  const fields = schema.fields ?? {};
+  const table = schema.table;
+  const requiredExternalId = schemaFieldName((fields as any).external_id).trim();
+  if (!requiredExternalId) throw new Error('Config databaseB2b inválida: customers_schema.fields.external_id ausente (mapeie "external_id").');
+  const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "customers_schema");
+  const syncedAtCol = schemaFieldName((fields as any).synced_at);
+
   let integrationLogId: number | null = null;
   try {
     const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
@@ -110,7 +118,7 @@ async function main() {
         processedAt: new Date(),
         date: null,
         company,
-        platform: platform ?? undefined,
+        platform: platform,
         command: "Clientes" as any,
         status: "PROCESSANDO",
         log: {
@@ -126,18 +134,10 @@ async function main() {
         errors: null,
       }),
     );
-    integrationLogId = started.id;
+    integrationLogId = Array.isArray(started) ? (started[0]?.id ?? null) : started.id;
   } catch (e) {
     console.warn("[databaseB2b:customers] falha ao gravar log inicial (PROCESSANDO):", e);
   }
-
-  const schema = cfg.customers_schema;
-  const fields = schema.fields ?? {};
-  const table = schema.table;
-  const requiredExternalId = schemaFieldName((fields as any).external_id).trim();
-  if (!requiredExternalId) throw new Error('Config databaseB2b inválida: customers_schema.fields.external_id ausente (mapeie "external_id").');
-  const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "customers_schema");
-  const syncedAtCol = schemaFieldName((fields as any).synced_at);
   const createdAtMapping = (fields as any).created_at ?? (fields as any).createdAt;
   const repLookupFieldRaw =
     fields.representative_id && typeof fields.representative_id === "object"
@@ -587,7 +587,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Clientes" as any,
             status: "FINALIZADO",
             log: {
@@ -643,7 +643,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Clientes" as any,
             status: "ERRO",
             log: {

@@ -106,6 +106,16 @@ async function main() {
     (await platformRepo.findOne({ where: { slug: "databaseB2b" } })) ??
     null;
 
+  const schema = cfg.representative_schema;
+  const fields = schema.fields ?? {};
+  const table = schema.table;
+  const requiredExternalId = schemaFieldName((fields as any).external_id).trim();
+  if (!requiredExternalId) {
+    throw new Error('Config databaseB2b inválida: representative_schema.fields.external_id ausente (mapeie "external_id").');
+  }
+  const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "representative_schema");
+  const syncedAtCol = schemaFieldName((fields as any).synced_at);
+
   let integrationLogId: number | null = null;
   try {
     const integrationLogRepo = AppDataSource.getRepository(IntegrationLog);
@@ -114,7 +124,7 @@ async function main() {
         processedAt: new Date(),
         date: null,
         company,
-        platform: platform ?? undefined,
+        platform: platform,
         command: "Representantes" as any,
         status: "PROCESSANDO",
         log: {
@@ -130,20 +140,10 @@ async function main() {
         errors: null,
       }),
     );
-    integrationLogId = started.id;
+    integrationLogId = Array.isArray(started) ? (started[0]?.id ?? null) : started.id;
   } catch (e) {
     console.warn("[databaseB2b:representatives] falha ao gravar log inicial (PROCESSANDO):", e);
   }
-
-  const schema = cfg.representative_schema;
-  const fields = schema.fields ?? {};
-  const table = schema.table;
-  const requiredExternalId = schemaFieldName((fields as any).external_id).trim();
-  if (!requiredExternalId) {
-    throw new Error('Config databaseB2b inválida: representative_schema.fields.external_id ausente (mapeie "external_id").');
-  }
-  const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "representative_schema");
-  const syncedAtCol = schemaFieldName((fields as any).synced_at);
   const createdAtMapping = (fields as any).created_at ?? (fields as any).createdAt;
   const supervisorLookupFieldRaw =
     fields.supervisor_id && typeof fields.supervisor_id === "object"
@@ -429,9 +429,9 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
-            command: "Representantes" as any,
-            status: "FINALIZADO",
+        platform: platform,
+        command: "Representantes" as any,
+        status: "FINALIZADO",
             log: {
               company: args.company,
               platform: platform ? { id: platform.id, slug: meta?.platformSlug ?? platform.slug } : null,
@@ -484,7 +484,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Representantes" as any,
             status: "ERRO",
             log: {

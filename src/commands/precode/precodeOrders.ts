@@ -398,7 +398,7 @@ async function main() {
       order.currentStatusCode = pickString(detail, "codigoStatusAtual");
       order.shippingAmount = pickString(detail, "valorFrete");
       order.deliveryDays = pickNumber(detail, "prazoEntrega");
-      order.deliveryDate = pickString(detail, "previsaoEntrega");
+      order.deliveryForecast = pickString(detail, "previsaoEntrega");
       order.totalAmount = pickString(detail, "valorTotalCompra");
       order.totalDiscount = pickString(detail, "valorTotalDesconto");
       order.marketplaceName = pickString(detail, "nomeAfiliado");
@@ -429,13 +429,20 @@ async function main() {
       order.raw = orderRaw as unknown;
 
       // order_date: menor data encontrada no acompanhamento (criação do pedido)
+      // delivery_date: só quando existe status "entregue" em dadosAcompanhamento
       const acompanhamentoArr = ensureArray(detail.dadosAcompanhamento);
       let minDate: string | null = null;
       let firstDate: string | null = null;
       let firstTime: string | null = null;
+      let deliveryDateFromTimeline: string | null = null;
       for (const entry of acompanhamentoArr) {
         if (!entry || typeof entry !== "object") continue;
         const obj = entry as Record<string, unknown>;
+        const descricao = (pickString(obj, "descricao") ?? "").trim().toLowerCase();
+        if (descricao === "entregue") {
+          const d = normalizeDateString(pickString(obj, "data"));
+          if (d) deliveryDateFromTimeline = d;
+        }
         const d = normalizeDateString(pickString(obj, "data"));
         if (!firstDate && d) {
           firstDate = d;
@@ -444,6 +451,7 @@ async function main() {
         if (!d) continue;
         if (!minDate || d < minDate) minDate = d; // YYYY-MM-DD permite comparação lexicográfica
       }
+      order.deliveryDate = deliveryDateFromTimeline;
       // Precode manda data + hora no acompanhamento; usamos a hora do 1º item (criação do pedido).
       // Fallback: se não vier hora, salva como 00:00:00 do dia.
       order.orderDate = parseDateTimeFromYmdHms(firstDate ?? minDate, firstTime);

@@ -41,8 +41,13 @@ export class Order {
   @Column({ type: "integer", nullable: true })
   deliveryDays?: number | null; // prazoEntrega
 
-  @Column({ type: "date", nullable: true })
-  deliveryDate?: string | null; // data prevista de entrega
+  /** Data prevista de entrega (ex.: previsaoEntrega da API). */
+  @Column({ type: "date", nullable: true, name: "delivery_forecast" })
+  deliveryForecast?: string | null;
+
+  /** Data de entrega efetiva: preenchida apenas quando existe status "entregue" em dadosAcompanhamento. */
+  @Column({ type: "date", nullable: true, name: "delivery_date" })
+  deliveryDate?: string | null;
 
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   totalAmount?: string | null; // valorTotalCompra

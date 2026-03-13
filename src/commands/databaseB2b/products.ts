@@ -167,7 +167,7 @@ async function main() {
         processedAt: new Date(),
         date: null,
         company,
-        platform: platform ?? undefined,
+        platform: platform,
         command: "Produtos" as any,
         status: "PROCESSANDO",
         log: {
@@ -183,7 +183,7 @@ async function main() {
         errors: null,
       }),
     );
-    integrationLogId = started.id;
+    integrationLogId = Array.isArray(started) ? (started[0]?.id ?? null) : started.id;
   } catch (e) {
     console.warn("[databaseB2b:products] falha ao gravar log inicial (PROCESSANDO):", e);
   }
@@ -608,7 +608,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Produtos" as any,
             status: "FINALIZADO",
             log: {
@@ -666,7 +666,7 @@ async function main() {
             processedAt: new Date(),
             date: null,
             company,
-            platform: platform ?? undefined,
+            platform: platform,
             command: "Produtos" as any,
             status: "ERRO",
             log: {
