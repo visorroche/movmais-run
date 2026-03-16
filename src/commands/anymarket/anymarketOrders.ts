@@ -61,6 +61,21 @@ function toNumericString(v: number | string | null): string | null {
   return String(n);
 }
 
+/** Igual anymarketProducts: "45145[160151]" => storeReference="45145", externalReference="160151". */
+function splitStoreReference(value: string | null): { storeReference: string | null; externalReference: string | null } {
+  if (!value) return { storeReference: null, externalReference: null };
+  const s = String(value).trim();
+  if (!s) return { storeReference: null, externalReference: null };
+  const match = /^([^\[\]]+)\[([^\[\]]+)\]$/.exec(s);
+  if (!match) return { storeReference: s, externalReference: null };
+  const storeReference = match[1]?.trim() ?? null;
+  const externalReference = match[2]?.trim() ?? null;
+  return {
+    storeReference: storeReference && storeReference.length > 0 ? storeReference : null,
+    externalReference: externalReference && externalReference.length > 0 ? externalReference : null,
+  };
+}
+
 function formatYmdUtc(d: Date): string {
   const yyyy = d.getUTCFullYear();
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -409,27 +424,45 @@ async function processOrdersPass(opts: {
       customersByExternalId.set(c.externalId, c);
     }
 
-    // Prefetch products por ecommerce_id (item.product.id na AnyMarket = ecommerceId no nosso Product)
+    // Prefetch products por ecommerce_id, ean e sku (AnyMarket: product.id=ecommerceId, sku.ean=ean, sku.id=sku)
     const ecommerceIdSet = new Set<string>();
+    const eanSet = new Set<string>();
+    const skuSet = new Set<string>();
     for (const o of ordersJson) {
       for (const it of ensureArray(o.items)) {
         const item = asRecord(it);
         if (!item) continue;
         const prodObj = asRecord(item.product ?? null) ?? {};
+        const skuObj = asRecord(item.sku ?? null) ?? {};
         const prodId = pickNumber(prodObj, "id");
         if (prodId != null) ecommerceIdSet.add(String(prodId));
+        const ean = pickString(skuObj, "ean");
+        if (ean) eanSet.add(ean);
+        const skuId = pickNumber(skuObj, "id") ?? pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId");
+        if (skuId != null) skuSet.add(String(skuId));
       }
     }
     const ecommerceIdArr = Array.from(ecommerceIdSet);
-    const existingProductsArr = ecommerceIdArr.length
-      ? // eslint-disable-next-line no-await-in-loop
-        await withRetry("db find existing products by ecommerceId (page)", () =>
-          productRepo.find({ where: { company: { id: company.id }, ecommerceId: In(ecommerceIdArr) } as any }),
-        )
-      : [];
+    const eanArr = Array.from(eanSet);
+    const skuArr = Array.from(skuSet);
+    const productConditions: Array<Record<string, unknown>> = [];
+    if (ecommerceIdArr.length > 0) productConditions.push({ company: { id: company.id }, ecommerceId: In(ecommerceIdArr) });
+    if (eanArr.length > 0) productConditions.push({ company: { id: company.id }, ean: In(eanArr) });
+    if (skuArr.length > 0) productConditions.push({ company: { id: company.id }, sku: In(skuArr) });
+    const existingProductsArr =
+      productConditions.length > 0
+        ? // eslint-disable-next-line no-await-in-loop
+          await withRetry("db find existing products (ecommerceId/ean/sku)", () =>
+            productRepo.find({ where: productConditions }),
+          )
+        : [];
     const productsByEcommerceId = new Map<string, Product>();
+    const productsByEan = new Map<string, Product>();
+    const productsBySku = new Map<string, Product>();
     for (const p of existingProductsArr) {
       if (p.ecommerceId) productsByEcommerceId.set(p.ecommerceId, p);
+      if (p.ean) productsByEan.set(p.ean, p);
+      productsBySku.set(p.sku, p);
     }
 
     const customersToSave: Customer[] = [];
@@ -530,41 +563,72 @@ async function processOrdersPass(opts: {
       else ordersToUpdate.push(order);
 
       // Produtos + itens: quando pedido é novo OU quando --force (re-busca itens mesmo para pedidos existentes)
+      // Sempre usamos o array items do payload; se a listagem vier sem itens, buscamos o pedido por ID (GET /orders/:id)
       if (!exists || force) {
         if (exists && force && order.id) orderIdsToReplaceItems.push(order.id);
-        for (const it of ensureArray(o.items)) {
+        let itemsForOrder = ensureArray(o.items);
+        if (itemsForOrder.length === 0) {
+          console.warn(`[anymarket:orders] pedido ${orderCode}: listagem veio sem items; buscando GET /orders/${orderCode}`);
+          try {
+            const orderUrl = `${baseUrl}/orders/${orderCode}`;
+            const { status, json: orderJson } = await anymarketGetJson(orderUrl, token);
+            if (status >= 200 && status < 300) {
+              const fullOrder = asRecord(orderJson);
+              itemsForOrder = fullOrder ? ensureArray(fullOrder.items) : [];
+              if (itemsForOrder.length > 0) {
+                (o as Record<string, unknown>).items = itemsForOrder;
+              } else {
+                console.warn(`[anymarket:orders] pedido ${orderCode}: GET por ID também retornou sem items`);
+              }
+            }
+          } catch (err) {
+            console.warn(`[anymarket:orders] pedido ${orderCode}: falha ao buscar por ID:`, (err as Error)?.message ?? err);
+          }
+        }
+        for (const it of itemsForOrder) {
           const item = asRecord(it);
           if (!item) continue;
           const skuObj = asRecord(item.sku ?? null) ?? {};
           const prodObj = asRecord(item.product ?? null) ?? {};
           const prodId = pickNumber(prodObj, "id");
-          if (prodId == null) continue;
-          const ecommerceIdStr = String(prodId);
+          const ecommerceIdStr = prodId != null ? String(prodId) : null;
+          const eanStr = pickString(skuObj, "ean");
+          const skuIdRaw = pickNumber(skuObj, "id") ?? pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId");
+          const skuStr = skuIdRaw != null ? String(skuIdRaw) : null;
 
-          let product = productsByEcommerceId.get(ecommerceIdStr) ?? null;
-          const isNewProduct = !product;
+          // Match com products: ecommerce_id (product.id) → ean (sku.ean) → sku (sku.id)
+          let product: Product | null =
+            (ecommerceIdStr != null ? productsByEcommerceId.get(ecommerceIdStr) : null) ??
+            (eanStr ? productsByEan.get(eanStr) : null) ??
+            (skuStr ? productsBySku.get(skuStr) : null) ??
+            null;
+
+          const qty = pickNumber(item, "amount");
+          const unitPriceRaw = pickNumber(item, "sellPrice") ?? pickNumber(item, "unit");
+
           if (!product) {
-            const skuFromItem =
-              String(pickNumber(skuObj, "id") ?? pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId") ?? "").trim() ||
-              ecommerceIdStr;
-            product = productRepo.create({ company, sku: skuFromItem, ecommerceId: ecommerceIdStr });
-          }
-          product.company = company;
-          product.ecommerceId = ecommerceIdStr;
-          // Não sobrescreve brand/model/category se manual_attributes_locked, mas podemos preencher name/ean/photo quando vazio
-          const nameFromItem = pickString(skuObj, "title") ?? pickString(prodObj, "title");
-          if (!product.name) product.name = nameFromItem;
-          if (!product.ean) product.ean = pickString(skuObj, "ean");
-          product.photo = product.photo ?? null;
-          product.raw = { product: prodObj, sku: skuObj };
-          productsByEcommerceId.set(ecommerceIdStr, product);
-          if (isNewProduct) {
+            // Cria produto quando não existe match (mesma lógica/campos que anymarketProducts)
+            const skuFromItem = (skuStr ?? ecommerceIdStr ?? "").trim() || String(orderCode);
+            product = productRepo.create({ company, sku: skuFromItem, ecommerceId: ecommerceIdStr ?? null });
+            product.company = company;
+            if (ecommerceIdStr) product.ecommerceId = ecommerceIdStr;
+            product.ean = eanStr ?? null;
+            product.name = pickString(skuObj, "title") ?? pickString(prodObj, "title");
+            product.value = toNumericString(unitPriceRaw);
+            const refs = splitStoreReference(
+              pickString(skuObj, "partnerId") ?? pickString(skuObj, "externalId") ?? pickString(prodObj, "externalIdProduct"),
+            );
+            product.storeReference = refs.storeReference;
+            product.externalReference = refs.externalReference;
+            product.photo = product.photo ?? null;
+            product.raw = { product: prodObj, sku: skuObj };
+            if (product.ecommerceId) productsByEcommerceId.set(product.ecommerceId, product);
+            if (product.ean) productsByEan.set(product.ean, product);
+            productsBySku.set(product.sku, product);
             productsToSave.push(product);
             counters.productsCreated += 1;
           }
 
-          const qty = pickNumber(item, "amount");
-          const unitPriceRaw = pickNumber(item, "sellPrice") ?? pickNumber(item, "unit");
           const totalItem = pickNumber(item, "total");
 
           const oi = itemRepo.create({
