@@ -30,6 +30,8 @@ import { AvancoLogisticOrderItem } from "../entities/Avanco/AvancoLogisticOrderI
 import { AvancoStock } from "../entities/Avanco/AvancoStock.js";
 import { AvancoStockMov } from "../entities/Avanco/AvancoStockMov.js";
 import { City } from "../entities/City.js";
+import { CustomDashboards } from "../entities/CustomDashboards.js";
+import { CustomDashboardThreads } from "../entities/CustomDashboardThreads.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
 export const AppDataSource = new DataSource({
@@ -86,6 +88,8 @@ export const AppDataSource = new DataSource({
     AvancoStock,
     AvancoStockMov,
     City,
+    CustomDashboards,
+    CustomDashboardThreads,
   ],
   migrations: [],
   subscribers: [],
