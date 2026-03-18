@@ -3,6 +3,10 @@ import { Company } from "./Company.js";
 import { User } from "./User.js";
 import type { BrazilianState } from "../utils/brazilian-states.js";
 
+/**
+ * Representantes/vendedores da company. Podem ser vinculados a pedidos (representante, assistente, supervisor).
+ * Plataformas: b2b
+ */
 @Entity({ name: "representatives" })
 @Unique("UQ_representatives_company_id_external_id", ["company", "externalId"])
 export class Representative {

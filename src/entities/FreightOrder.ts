@@ -2,6 +2,10 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique, 
 import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
 
+/**
+ * Pedidos de frete que são realizados pela empresa logistica (Allpost). Um pedido de frete com itens (FreightOrderItem), valores e datas.
+ * Plataformas: logistic
+ */
 @Entity({ name: "freight_orders" })
 @Index("idx_freight_orders_company_date", ["company", "date"])
 @Unique("UQ_freight_orders_company_id_platform_id_external_id", ["company", "platform", "externalId"])
@@ -25,39 +29,39 @@ export class FreightOrder {
   @Column({ type: "varchar", length: 8, nullable: true })
   time?: string | null;
 
-  // AllPost: numeroPedido
+  // numero do pedido do operador logistico
   @Column({ type: "varchar", nullable: true })
   orderCode?: string | null;
 
-  // AllPost: nomeLoja
+  // NOMAP
   @Column({ type: "varchar", nullable: true })
   storeName?: string | null;
 
-  // AllPost: idCotacao
+  // id da cotacao que originou o pedido 
   @Column({ type: "varchar", nullable: true })
   quoteId?: string | null;
 
-  // AllPost: canal
+  // canal, marketplace que gerou o pedido Mercado Livre, Amazon, etc.
   @Column({ type: "varchar", nullable: true })
   channel?: string | null;
 
-  // AllPost: valorFretePedido
+  // valor do frete do pedido repassado para o cliente
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   freightAmount?: string | null;
 
-  // AllPost: valorFreteReal
+  // valor do custo do frete real que a empresa paga
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   freightCost?: string | null;
 
-  // AllPost: valorFreteDiferencaPedidoCotacao
+  // diferenca entre o valor do frete repassado para o cliente e o valor do custo do frete real que a empresa paga
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   deltaQuote?: string | null;
 
-  /** Soma de envio[].notaFiscal.valorTotalProdutos (valor total dos produtos na NF). */
+  /** Valor total dos produtos na NF */
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   invoiceValue?: string | null;
 
-  // enderecoEntrega.*
+  // endereco de entrega do pedido
   @Column({ type: "varchar", nullable: true })
   address?: string | null;
 
@@ -79,20 +83,23 @@ export class FreightOrder {
   @Column({ type: "varchar", nullable: true })
   addressComplement?: string | null;
 
-  // derivados de envio[] (sempre max)
+  // data estimada de entrega do pedido
   @Column({ type: "timestamptz", nullable: true })
   estimatedDeliveryDate?: Date | null; // max(envio.prazoEntregaPedido)
 
-  /** Número de dias (calendário) entre date e estimated_delivery_date (sempre no fuso Brasil). */
+  /** Número de dias (calendário) entre data do pedido e data estimada de entrega do pedido. */
   @Column({ type: "integer", nullable: true })
   numDeliveryDays?: number | null;
 
+  // data de entrega do pedido de fato, null quando ainda nao foi entregue
   @Column({ type: "timestamptz", nullable: true })
   deliveryDate?: Date | null; // max(envio.dataEntrega)
 
+  // diferenca entre a data estimada de entrega do pedido e a data de entrega do pedido de fato
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   deltaQuoteDeliveryDate?: string | null; // max(envio.diferencaPedidoCotacao)
 
+  // NOMAP - payload "cru" do parceiro (somente para logs/auditoria)
   @Column({ type: "jsonb", nullable: true })
   raw?: unknown;
 
@@ -100,6 +107,7 @@ export class FreightOrder {
   @JoinColumn({ name: "company_id" })
   company!: Company;
 
+  // NOMAP
   @ManyToOne(() => Plataform, { nullable: true })
   @JoinColumn({ name: "platform_id" })
   platform?: Plataform;

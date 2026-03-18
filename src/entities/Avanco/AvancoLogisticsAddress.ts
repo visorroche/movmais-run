@@ -3,6 +3,9 @@ import { Company } from "../Company.js";
 import { AvancoLogisticsOperator } from "./AvancoLogisticsOperator.js";
 import { AvancoLogisticsTablePrice } from "./AvancoLogisticsTablePrice.js";
 
+/**
+ * Endereços/faixas de CEP do operador logístico (Avanço): faixa CEP, UF, cidade, dias, preço. Vinculado a tabela de preço.
+ */
 @Entity({ name: "avanco_logistics_addresses" })
 export class AvancoLogisticsAddress {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })

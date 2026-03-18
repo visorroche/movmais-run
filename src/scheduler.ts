@@ -677,13 +677,13 @@ async function main() {
       );
     });
 
-  // job: database B2B (a cada 1h)
-  // Observação: aceitamos variações de slug para compatibilidade.
+  // job: database B2B (a cada 1h) — período: ontem até +30 dias (inclui vendas futuras)
   const DBB2B_SLUGS = ["b2b_database", "database_b2b", "databaseb2b", "databaseB2b"];
   const tickDatabaseB2bSync = () =>
     runJob("databaseB2b:sync", async () => {
-      const end = formatYmdUtc(utcMidnight(new Date()));
-      const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
+      const today = utcMidnight(new Date());
+      const start = formatYmdUtc(addDaysUtc(today, -1));
+      const end = formatYmdUtc(addDaysUtc(today, 30));
       await runDatabaseB2bPipelineForCompanies(DBB2B_SLUGS, start, end);
     });
 

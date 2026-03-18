@@ -35,6 +35,10 @@ export class CustomDashboards {
   @Column({ type: "varchar", length: 20, default: "published" })
   status!: string;
 
+  /** Se preenchido: este registro é um rascunho de edição do dashboard publicado com id = original_id. Ao publicar, aplica no original e remove o draft. */
+  @Column({ type: "int", nullable: true, name: "original_id" })
+  original_id!: number | null;
+
   /** only = só o user_id vê; all = todos os usuários da empresa (só para published). */
   @Column({ type: "varchar", length: 10, default: "only" })
   type_access!: string;

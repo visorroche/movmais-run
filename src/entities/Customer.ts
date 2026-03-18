@@ -7,6 +7,10 @@ import type { BrazilianState } from "../utils/brazilian-states.js";
 import type { PersonType } from "../utils/person-type.js";
 import type { Gender } from "../utils/gender.js";
 
+/**
+ * Clientes finais da company (compradores). Usado em pedidos e em grupos de clientes (CustomersGroup).
+ * Plataformas: ecommerce, b2b
+ */
 @Entity({ name: "customers" })
 @Unique("UQ_customers_company_id_external_id", ["company", "externalId"])
 @Index("idx_customers_company_internal_cod", ["company", "internalCod"])
@@ -19,12 +23,13 @@ export class Customer {
   @JoinColumn({ name: "company_id" })
   company!: Company;
 
-  // id do customer na plataforma para essa company (ex: Tray customer_id; no Precode usamos cpfCnpj)
+  // id do customer no sistema dele (ex: Tray customer_id; no Precode usamos cpfCnpj)
   @Column({ type: "varchar", nullable: true })
   externalId?: string | null;
 
+  // CPF ou Cnpj do cliente
   @Column({ type: "varchar" })
-  taxId!: string; // cpfCnpj
+  taxId!: string; 
 
   /** Código interno do cliente no ERP/CRM do cliente. */
   @Column({ type: "varchar", nullable: true, name: "internal_cod" })
@@ -68,27 +73,32 @@ export class Customer {
   tradeName?: string | null; // fantasia
 
   @Column({ type: "varchar", nullable: true })
-  gender?: Gender | null; // F | M | B
+  gender?: Gender | null; 
 
+  // data de nascimento do cliente
   @Column({ type: "date", nullable: true })
-  birthDate?: string | null; // dataNascimento
+  birthDate?: string | null; 
 
   @Column({ type: "varchar", nullable: true })
   email?: string | null;
 
+  // status ativo/inativo do cliente usar só true 
   @Column({ type: "boolean", nullable: true })
   status?: boolean | null;
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   deliveryAddress?: unknown; // dadosEntrega
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   phones?: unknown; // telefones
 
+  // NOMAP
   @Column({ type: "text", nullable: true })
   obs?: string | null;
 
-  // payload "cru" do parceiro (somente para logs/auditoria)
+  // NOMAP - payload "cru" do parceiro (somente para logs/auditoria)
   @Column({ type: "jsonb", nullable: true })
   raw?: unknown;
 
@@ -97,6 +107,7 @@ export class Customer {
   @JoinColumn({ name: "representative_id" })
   representative?: Representative | null;
 
+  // UM CLIENTE PODE PERTENCER A UM GRUPO MAIOR DE CLIENTES UTIL PARA AGRUPAR CLIENTES DA MESMA REDE
   @ManyToOne(() => CustomersGroup, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "customer_group_id" })
   customerGroup?: CustomersGroup | null;

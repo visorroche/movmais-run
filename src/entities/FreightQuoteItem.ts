@@ -3,6 +3,10 @@ import { Company } from "./Company.js";
 import { Product } from "./Product.js";
 import { FreightQuote } from "./FreightQuote.js";
 
+/**
+ * Itens de uma cotação de frete: produto, quantidade, peso. Pertence a FreightQuote.
+ * Plataformas: logistic
+ */
 @Entity({ name: "freight_quotes_items" })
 @Index("idx_freight_quotes_items_product_id", ["product"])
 @Unique("UQ_freight_quotes_items_quote_id_line_index", ["quote", "lineIndex"])

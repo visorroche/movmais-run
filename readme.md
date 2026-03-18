@@ -32,6 +32,16 @@ Aplica alterações:
 npm run script:sync-schema
 ```
 
+### Resumo do schema (para a IA)
+
+Gera um arquivo Markdown com a estrutura das tabelas e colunas a partir das entidades em `src/entities/`. O arquivo é salvo em `api/src/prompt/schema-resume.md` e é usado pela API nos prompts da IA que montam queries de dashboards customizados, para que a IA use apenas tabelas e campos existentes.
+
+Entidades que não devem entrar no resumo (ex.: tabelas de sistema) ficam em `SKIP_ENTITIES` em `src/commands/schemaResumeMd.ts`. Rode após alterar entidades para atualizar o schema enviado à IA.
+
+```bash
+npm run schema:resume-md
+```
+
 ## Integrações (execução manual)
 
 ### Precode

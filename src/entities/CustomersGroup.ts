@@ -1,6 +1,10 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, Unique } from "typeorm";
 import { Company } from "./Company.js";
 
+/**
+ * Grupos de clientes. Agrupa customers de uma mesma rede.
+ * Plataformas: b2b
+ */
 @Entity({ name: "customers_group" })
 @Unique("UQ_customers_group_company_id_external_id", ["company", "externalId"])
 export class CustomersGroup {

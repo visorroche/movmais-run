@@ -2,6 +2,10 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "t
 import { Product } from "../Product.js";
 import { AvancoLogisticOrder } from "./AvancoLogisticOrder.js";
 
+/**
+ * Itens de um pedido logístico Avanço: produto, quantidade. Pertence a AvancoLogisticOrder.
+ * Avanço: requer company.avanco=true
+ */
 @Entity({ name: "avanco_logistic_order_items" })
 export class AvancoLogisticOrderItem {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })

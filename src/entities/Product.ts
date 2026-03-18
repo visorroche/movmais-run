@@ -2,6 +2,10 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique, 
 import { Company } from "./Company.js";
 import { Category } from "./Category.js";
 
+/**
+ * Catálogo de produtos por company (SKU, nome, preço, categoria, peso/dimensões). Usado em pedidos e cotações de frete.
+ * Plataformas: ecommerce, b2b
+ */
 @Entity({ name: "products" })
 @Unique("UQ_products_company_id_sku", ["company", "sku"])
 @Index("idx_products_company_category", ["company", "categoryRef"])
@@ -26,12 +30,15 @@ export class Product {
   @Column({ type: "varchar", nullable: true })
   ecommerceId?: string | null;
 
+  // EAN do produto
   @Column({ type: "varchar", nullable: true })
   ean?: string | null;
 
+  // slug do produto
   @Column({ type: "varchar", nullable: true })
   slug?: string | null;
 
+  // nome do produto
   @Column({ type: "varchar", nullable: true })
   name?: string | null;
 

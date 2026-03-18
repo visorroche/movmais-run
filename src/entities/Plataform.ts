@@ -17,6 +17,9 @@ export type PlataformParameter = {
   schemaEntity?: PlataformSchemaEntity;
 };
 
+/**
+ * Plataformas de integração (Precode, Tray, AnyMarket, etc.). Uma company pode ter várias via CompanyPlataform.
+ */
 @Entity({ name: "platforms" })
 export class Plataform {
   @PrimaryGeneratedColumn()

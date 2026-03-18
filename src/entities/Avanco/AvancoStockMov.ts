@@ -8,6 +8,10 @@ export type AvancoStockMovType = "order" | "logistic_order";
  * Registro de cada movimentação que altera o AvancoStock (entrada ou saída).
  * type_id = id do pedido (Order.id) ou id do AvancoLogisticOrder.
  */
+/**
+ * Movimentações de estoque Avanço (entrada/saída). Vinculado a AvancoStock.
+ * Avanço: requer company.avanco=true
+ */
 @Entity({ name: "avanco_stock_mov" })
 export class AvancoStockMov {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })

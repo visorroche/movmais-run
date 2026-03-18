@@ -3,6 +3,10 @@ import { Company } from "./Company.js";
 import { Product } from "./Product.js";
 import { FreightOrder } from "./FreightOrder.js";
 
+/**
+ * Itens de um pedido de frete: produto, quantidade, peso, valor. Pertence a FreightOrder.
+ * Plataformas: logistic
+ */
 @Entity({ name: "freight_order_items" })
 @Index("idx_freight_order_items_product_id", ["product"])
 @Unique("UQ_freight_order_items_order_id_line_index", ["order", "lineIndex"])
@@ -58,6 +62,7 @@ export class FreightOrderItem {
   @Column({ type: "varchar", nullable: true })
   variation?: string | null; // variacao
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   raw?: unknown;
 }

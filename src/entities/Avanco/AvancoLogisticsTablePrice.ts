@@ -1,6 +1,9 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
 import { Company } from "../Company.js";
 
+/**
+ * Tabelas de preço do operador logístico (Avanço): origem, destino, faixa de peso, valor. Usada em AvancoLogisticsAddress.
+ */
 @Entity({ name: "avanco_logistics_table_price" })
 export class AvancoLogisticsTablePrice {
   @PrimaryGeneratedColumn("increment", { type: "bigint" })

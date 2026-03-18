@@ -3,6 +3,9 @@ import { CompanyUser } from "./CompanyUser.js";
 
 export type UserType = 'admin' | 'user';
 
+/**
+ * Usuários do sistema (login). Acesso a companies via CompanyUser.
+ */
 @Entity({ name: "users" })
 export class User {
   @PrimaryGeneratedColumn()

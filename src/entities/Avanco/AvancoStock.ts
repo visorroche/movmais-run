@@ -3,8 +3,8 @@ import { Company } from "../Company.js";
 import { Product } from "../Product.js";
 
 /**
- * Estoque no operador logístico: produtos enviados pela origem e recebidos pelo operador.
- * Uma linha por (company_origin_id, company_logistic_id, product_id); quantity é somada ao recebimento.
+ * Estoque Avanço: quantidade de produto da empresa de origem naquele operador logístico (uma linha por origin, logistic, product). Movimentações em AvancoStockMov.
+ * Avanço: requer company.avanco=true
  */
 @Entity({ name: "avanco_stock" })
 @Index("UQ_avanco_stock_origin_logistic_product", ["companyOriginId", "companyLogisticId", "productId"], {

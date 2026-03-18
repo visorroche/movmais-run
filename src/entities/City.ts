@@ -1,5 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, Index } from "typeorm";
 
+/**
+ * Cidades (IBGE). Usado em endereços e regras de frete (ex.: Avanço).
+ */
 @Entity({ name: "cities" })
 @Index("idx_cities_uf", ["uf"])
 export class City {

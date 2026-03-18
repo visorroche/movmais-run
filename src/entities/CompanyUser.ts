@@ -2,6 +2,9 @@ import { Entity, PrimaryGeneratedColumn, ManyToOne, JoinColumn, Column } from "t
 import { Company } from "./Company.js";
 import { User } from "./User.js";
 
+/**
+ * Vínculo usuário–company (permissões por empresa). Um usuário pode acessar várias companies.
+ */
 @Entity({ name: "company_users" })
 export class CompanyUser {
   @PrimaryGeneratedColumn("increment")

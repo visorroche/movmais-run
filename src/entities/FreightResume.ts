@@ -1,6 +1,9 @@
 import { Entity, PrimaryGeneratedColumn, Column, Index, Unique } from "typeorm";
 
-/** Tabela de resumo por dia/canal/estado/faixa de frete e prazo. Preenchida pelo script resume:freight. */
+/**
+ * Resumo agregado de frete (totais, métricas). Com o resumo das cotações e pedidos de frete.
+ * Plataformas: logistic
+ */
 @Entity({ name: "freight_resume" })
 @Unique("UQ_freight_resume_company_date_channel_state_freight_deadline", [
   "companyId",
@@ -23,9 +26,11 @@ export class FreightResume {
   @Column({ type: "date" })
   date!: Date;
 
+  // canal, marketplace que gerou a cotacao Mercado Livre, Amazon, etc.
   @Column({ type: "varchar", length: 255, default: "" })
   channel!: string;
 
+  // uf do estado de destino da cotacao 2 caracteres. Ex: SP, RJ, etc.
   @Column({ type: "varchar", length: 32, default: "" })
   state!: string;
 
@@ -37,15 +42,19 @@ export class FreightResume {
   @Column({ type: "varchar", length: 16, nullable: true })
   deadlineBucket?: string | null;
 
+  // total de cotações
   @Column({ type: "int", default: 0 })
   totalSimulations!: number;
 
+  // total de pedidos de frete efetivados
   @Column({ type: "int", default: 0 })
   totalOrders!: number;
 
+  // total do valor das cotações
   @Column({ type: "numeric", precision: 18, scale: 2, nullable: true })
   totalValueSimulations?: string | null;
 
+  // total do valor dos pedidos de frete efetivados
   @Column({ type: "numeric", precision: 18, scale: 2, nullable: true })
   totalValueOrders?: string | null;
 }

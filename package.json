@@ -31,6 +31,7 @@
     "script:resume:freight": "npm run build && node dist/commands/resume/freight.js",
     "script:sync-schema": "npm run build && node dist/commands/syncSchema.js",
     "schema:log": "npm run build && node dist/commands/schemaLog.js",
+    "schema:resume-md": "npm run build && node dist/commands/schemaResumeMd.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

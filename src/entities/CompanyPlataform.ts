@@ -2,6 +2,9 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, Unique }
 import { Company } from "./Company.js";
 import { Plataform } from "./Plataform.js";
 
+/**
+ * Vínculo company–plataforma com configuração (tokens, credenciais). Habilita integrações por empresa.
+ */
 @Entity({ name: "company_platforms" })
 @Unique("UQ_company_platforms_company_id_platform_id", ["company", "platform"])
 export class CompanyPlataform {

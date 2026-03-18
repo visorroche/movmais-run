@@ -1,6 +1,10 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from "typeorm";
 import { Company } from "../Company.js";
 
+/**
+ * Operadores logísticos do Avanço. Usado em pedidos logísticos (AvancoLogisticOrder).
+ * Avanço: requer company.avanco=true
+ */
 @Entity({ name: "avanco_logistics_operators" })
 export class AvancoLogisticsOperator {
   @PrimaryGeneratedColumn()

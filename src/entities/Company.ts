@@ -3,6 +3,9 @@ import { Group } from "./Group.js";
 import { CompanyPlataform } from "./CompanyPlataform.js";
 import { CompanyUser } from "./CompanyUser.js";
 
+/**
+ * Empresas/clientes do sistema. Agrupa usuários, pedidos, produtos, plataformas e configurações (representantes, televendas, Avanço, etc.).
+ */
 @Entity({ name: "companies" })
 export class Company {
   @PrimaryGeneratedColumn()

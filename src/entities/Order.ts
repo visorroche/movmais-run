@@ -6,6 +6,10 @@ import { Plataform } from "./Plataform.js";
 import { Representative } from "./Representative.js";
 import type { OrderStatus } from "../utils/status/index.js";
 
+/**
+ * Pedidos de venda (e-commerce, B2B, marketplaces). Um pedido pertence a um customer e pode ter representantes e assistentes.
+ * Plataformas: ecommerce, b2b
+ */
 @Entity({ name: "orders" })
 @Index("idx_orders_customer_id", ["customer"])
 @Index("idx_orders_company_customer_orderdate", ["company", "customer", "orderDate"])
@@ -49,17 +53,21 @@ export class Order {
   @Column({ type: "date", nullable: true, name: "delivery_date" })
   deliveryDate?: string | null;
 
+  // total do pedido
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
-  totalAmount?: string | null; // valorTotalCompra
+  totalAmount?: string | null; 
 
+  // total do desconto aplicado no pedido
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
-  totalDiscount?: string | null; // valorTotalDesconto
+  totalDiscount?: string | null; 
 
+  // nome do marketplace (ex.: Magalu, Shopee, etc.)
   @Column({ type: "varchar", nullable: true })
-  marketplaceName?: string | null; // nome do marketplace (ex.: Magalu, Shopee, etc.)
+  marketplaceName?: string | null; 
 
+  // NOMAP
   @Column({ type: "varchar", nullable: true, default: "offline" })
-  channel?: string | null; // canal
+  channel?: string | null; 
 
   // Data de pagamento (Tray: payment_date; Precode: usamos order_date)
   @Column({ type: "date", nullable: true })
@@ -99,22 +107,27 @@ export class Order {
   @Column({ type: "varchar", nullable: true })
   subsidiary?: string | null;
 
-  // campos extras / específicos de integrações
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   metadata?: unknown;
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   storePickup?: unknown; // retiraLoja
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   payments?: unknown; // pagamento
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   tracking?: unknown; // dadosRastreio
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   timeline?: unknown; // dadosAcompanhamento
 
+  // NOMAP
   @Column({ type: "jsonb", nullable: true })
   raw?: unknown;
 
@@ -126,18 +139,22 @@ export class Order {
   @JoinColumn({ name: "company_id" })
   company!: Company;
 
+  // NOMAP
   @ManyToOne(() => Plataform, { nullable: true })
   @JoinColumn({ name: "platform_id" })
   platform?: Plataform;
 
+  // Uma venda pode ter um representante que é o vendedor do pedido
   @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "representative_id" })
   representative?: Representative | null;
 
+  // Uma venda pode ter um assistente que ajudou o vendedor a fechar a venda
   @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "assistant_id" })
   assistant?: Representative | null;
 
+  // Uma venda pode ter um supervisor que é o supervisor do vendedor e ajudou a fechar a venda
   @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "supervisor_id" })
   supervisor?: Representative | null;
