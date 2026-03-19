@@ -660,7 +660,7 @@ async function main() {
     const productCache = new Map<string, Product>();
     const trayCustomStatusMap = parseTrayCustomStatusMap(cfg.status);
     const orderDetailCache = new Map<
-      number,
+      string,
       { date: string | null; hour: string | null; marketplaceCreated: string | null; modified: string | null }
     >();
 
@@ -749,8 +749,8 @@ async function main() {
         const ordersArr = ensureArray(root.Orders);
         if (ordersArr.length === 0) break;
 
-        const pageOrders: Array<{ id: number; orderObj: Record<string, unknown>; trayCustomerId: string | null }> = [];
-        const orderCodes: number[] = [];
+        const pageOrders: Array<{ id: number; orderCode: string; orderObj: Record<string, unknown>; trayCustomerId: string | null }> = [];
+        const orderCodes: string[] = [];
         const customerExternalIds = new Set<string>();
 
         for (const wrapper of ordersArr) {
@@ -760,8 +760,8 @@ async function main() {
           const id = pickNumber(orderObj, "id");
           if (!id) continue;
           const trayCustomerId = pickString(orderObj, "customer_id");
-          pageOrders.push({ id, orderObj, trayCustomerId });
-          orderCodes.push(id);
+          pageOrders.push({ id, orderCode: String(id), orderObj, trayCustomerId });
+          orderCodes.push(String(id));
           if (trayCustomerId) customerExternalIds.add(trayCustomerId);
         }
 
@@ -776,8 +776,8 @@ async function main() {
               3,
             )
           : [];
-        const existingOrdersByCode = new Map<number, Order>();
-        for (const o of existingOrdersArr) existingOrdersByCode.set(o.orderCode, o);
+        const existingOrdersByCode = new Map<string, Order>();
+        for (const o of existingOrdersArr) existingOrdersByCode.set(String(o.orderCode), o);
 
         const customerExternalIdArr = Array.from(customerExternalIds);
         const existingCustomersArr = customerExternalIdArr.length
@@ -798,12 +798,12 @@ async function main() {
         }
 
         const ordersToUpdate: Order[] = [];
-        const backfillOrderDates: Array<{ orderCode: number; orderDate: Date }> = [];
-        const orderCodesNeedingDetailBackfill = new Set<number>();
+        const backfillOrderDates: Array<{ orderCode: string; orderDate: Date }> = [];
+        const orderCodesNeedingDetailBackfill = new Set<string>();
         const ordersToInsert: Order[] = [];
-        const orderObjByCode = new Map<number, Record<string, unknown>>();
+        const orderObjByCode = new Map<string, Record<string, unknown>>();
 
-        const addBackfillOrderDate = (orderCode: number, candidate: Date | null) => {
+        const addBackfillOrderDate = (orderCode: string, candidate: Date | null) => {
           if (!candidate) return;
           backfillOrderDates.push({ orderCode, orderDate: candidate });
         };
@@ -830,11 +830,11 @@ async function main() {
           return parseDateTimeFromSql(createdSql) ?? (hourFromList ? parseDateTimeFromYmdHms(ymd, hourFromList) : null);
         };
 
-        for (const { id, orderObj, trayCustomerId } of pageOrders) {
-          let order = existingOrdersByCode.get(id) ?? null;
+        for (const { id, orderCode, orderObj, trayCustomerId } of pageOrders) {
+          let order = existingOrdersByCode.get(orderCode) ?? null;
           const orderExists = Boolean(order);
-          if (!order) order = orderRepo.create({ orderCode: id });
-          if (!orderExists) orderObjByCode.set(id, orderObj);
+          if (!order) order = orderRepo.create({ orderCode });
+          if (!orderExists) orderObjByCode.set(orderCode, orderObj);
 
           // --onlyInsert: ignora totalmente updates; só insere pedidos inexistentes no banco.
           if (onlyInsert && orderExists) {
@@ -1040,11 +1040,15 @@ async function main() {
             // Correção de order_date: se o pedido já existe mas o order_date está ausente OU claramente errado,
             // tenta ajustar sem calls extras; se não der, agenda busca do detalhe do pedido.
             const candidate = getCandidateFromList(orderObj);
-            if (candidate) {
-              if (shouldUpdateOrderDate(order.orderDate ?? null, candidate)) addBackfillOrderDate(order.orderCode, candidate);
-            } else if (!order.orderDate || isMidnightUtc(order.orderDate)) {
-              // se não veio hora/created na listagem e o que temos é nulo/00:00:00, tenta no detalhe
-              orderCodesNeedingDetailBackfill.add(order.orderCode);
+            const existingOrderCode = order.orderCode;
+            if (existingOrderCode) {
+              if (candidate) {
+                if (shouldUpdateOrderDate(order.orderDate ?? null, candidate))
+                  addBackfillOrderDate(existingOrderCode, candidate);
+              } else if (!order.orderDate || isMidnightUtc(order.orderDate)) {
+                // se não veio hora/created na listagem e o que temos é nulo/00:00:00, tenta no detalhe
+                orderCodesNeedingDetailBackfill.add(existingOrderCode);
+              }
             }
 
             ordersToUpdate.push(order);
@@ -1072,7 +1076,7 @@ async function main() {
           // 3) Fallback: buscar detalhe do pedido para tentar pegar "hour"
           // Otimização: se o pedido já existe, não buscamos detalhe (request individual).
           if (!orderDate && !orderExists) {
-            const cached = orderDetailCache.get(id);
+            const cached = orderDetailCache.get(orderCode);
             let dateFromDetail: string | null = cached?.date ?? null;
             let hourFromDetail: string | null = cached?.hour ?? null;
             let createdFromDetail: string | null = cached?.marketplaceCreated ?? null;
@@ -1090,7 +1094,7 @@ async function main() {
               const detMoArr = ensureArray((det as any)?.MarketplaceOrder);
               const detMo0 = detMoArr.length ? asRecord(detMoArr[0]) : null;
               createdFromDetail = detMo0 ? pickString(detMo0, "created") : null;
-              orderDetailCache.set(id, {
+              orderDetailCache.set(orderCode, {
                 date: dateFromDetail,
                 hour: hourFromDetail,
                 marketplaceCreated: createdFromDetail,
@@ -1269,14 +1273,19 @@ async function main() {
               currentStatus: (o.currentStatus ?? null) as string | null,
               currentStatusCode: (o.currentStatusCode ?? null) as string | null,
             }))
-            .filter((u) => Number.isInteger(u.orderCode) && u.orderCode > 0);
+            .filter((u) => {
+              const s = String(u.orderCode ?? "").trim();
+              if (!s) return false;
+              const n = Number(s);
+              return Number.isFinite(n) && n > 0;
+            });
 
           for (const batch of chunkArray(updates, 10)) {
             if (batch.length === 0) continue;
             const valuesSql = batch
               .map((_, idx) => {
                 const base = 2 + idx * 3;
-                return `($${base}::int, $${base + 1}::text, $${base + 2}::text)`;
+                return `($${base}::text, $${base + 1}::text, $${base + 2}::text)`;
               })
               .join(", ");
             const sql = `
@@ -1326,7 +1335,7 @@ async function main() {
         if (backfillOrderDates.length > 0) {
           for (const batch of chunkArray(backfillOrderDates, 10)) {
             if (batch.length === 0) continue;
-            const valuesSql = batch.map((_, idx) => `($${2 + idx * 2}::int, $${3 + idx * 2}::timestamp)`).join(", ");
+            const valuesSql = batch.map((_, idx) => `($${2 + idx * 2}::text, $${3 + idx * 2}::timestamp)`).join(", ");
             const sql = `
               UPDATE orders o
               SET order_date = v.order_date
@@ -1378,14 +1387,17 @@ async function main() {
                     `[tray:orders] duplicado (unique) ao inserir pedido; tentando atualizar existente. company_id=${companyEntity.id} order_code=${o.orderCode}`,
                   );
                   // eslint-disable-next-line no-await-in-loop
-                  const existing = await withRetry(
-                    `db findOne order after unique order_code=${o.orderCode}`,
-                    () =>
-                      orderRepo.findOne({
-                        where: { company: { id: companyEntity.id }, orderCode: o.orderCode },
-                      }),
-                    3,
-                  );
+                  const oc = o.orderCode;
+                  const existing = oc
+                    ? await withRetry(
+                        `db findOne order after unique order_code=${oc}`,
+                        () =>
+                          orderRepo.findOne({
+                            where: { company: { id: companyEntity.id }, orderCode: oc },
+                          }),
+                        3,
+                      )
+                    : null;
                   if (!existing) {
                     console.warn(
                       `[tray:orders] violação de unique, mas não encontrei o registro existente; pulando. company_id=${companyEntity.id} order_code=${o.orderCode}`,
@@ -1418,7 +1430,9 @@ async function main() {
 
         // Itens/produtos: somente para pedidos inseridos nesta página.
         for (const savedOrder of insertedOrdersForItems) {
-          const orderObj = orderObjByCode.get(savedOrder.orderCode);
+          const savedCode = savedOrder.orderCode;
+          if (!savedCode) continue;
+          const orderObj = orderObjByCode.get(savedCode);
           if (!orderObj) continue;
           const productsSold = ensureArray(orderObj.ProductsSold);
           const itemsToSave: OrderItem[] = [];

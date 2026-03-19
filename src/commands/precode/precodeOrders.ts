@@ -349,7 +349,9 @@ async function main() {
       const codigoPedido = pickNumber(detail, "codigoPedido");
       if (!codigoPedido) continue;
 
-      const existingOrder = await orderRepo.findOne({ where: { company: { id: companyRef.id }, orderCode: codigoPedido } });
+      const existingOrder = await orderRepo.findOne({
+        where: { company: { id: companyRef.id }, orderCode: String(codigoPedido) },
+      });
       if (args.onlyInsert && existingOrder) {
         processed += 1;
         continue;
@@ -384,7 +386,7 @@ async function main() {
 
       let order = existingOrder;
       if (!order) {
-        order = orderRepo.create({ orderCode: codigoPedido });
+        order = orderRepo.create({ orderCode: String(codigoPedido) });
       }
 
       const precodeStatusRaw = pickString(detail, "statusAtual");

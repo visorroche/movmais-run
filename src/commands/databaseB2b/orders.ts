@@ -33,6 +33,14 @@ function toIntLoose(v: unknown): number | null {
   return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
+/** order_code no banco é varchar; aceita número ou texto vindo do cliente. */
+function orderCodeStringFromMapped(raw: unknown): string | null {
+  const n = toIntLoose(raw);
+  if (n != null && n !== 0) return String(n);
+  const s = String(raw ?? "").trim();
+  return s || null;
+}
+
 function toNumberLoose(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -383,10 +391,10 @@ async function main() {
 
     const groups = new Map<string, Record<string, any>[]>();
     let rowsSkippedNoExternalId = 0;
-    const distinctOrderCodeInRows = new Set<number>();
+    const distinctOrderCodeInRows = new Set<string>();
     for (const row of rows) {
       const externalId = String(applyFieldMapping((orderFields as any).external_id, row) ?? "").trim();
-      const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, row));
+      const orderCode = orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, row));
       if (orderCode) distinctOrderCodeInRows.add(orderCode);
       if (!externalId) {
         rowsSkippedNoExternalId++;
@@ -412,7 +420,7 @@ async function main() {
     let groupsWithNoOrderCode = 0;
     for (const [, orderRows] of groups.entries()) {
       const first = orderRows[0];
-      if (first && !toIntLoose(applyFieldMapping(orderFields.order_code, first))) groupsWithNoOrderCode++;
+      if (first && !orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, first))) groupsWithNoOrderCode++;
     }
     console.log(
       `[databaseB2b:orders] carregado do cliente rows=${totalRows} orders=${totalOrders} distinct_order_code=${distinctOrderCodeInRows.size} rows_sem_external_id=${rowsSkippedNoExternalId} grupos_sem_order_code=${groupsWithNoOrderCode}`,
@@ -434,12 +442,12 @@ async function main() {
     const supervisorLookupVals = new Set<string>();
     const productLookupVals = new Set<string>();
     const skuVals = new Set<string>();
-    const orderCodes = new Map<string, number>();
+    const orderCodes = new Map<string, string>();
 
     for (const [, orderRows] of groups.entries()) {
       const first = orderRows[0];
       if (!first) continue;
-      const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, first));
+      const orderCode = orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, first));
       if (orderCode) orderCodes.set(String(applyFieldMapping((orderFields as any).external_id, first) ?? "").trim(), orderCode);
       const customerKey = String(applyFieldMapping(orderFields.customer_id, first) ?? "").trim();
       if (customerKey) customerLookupVals.add(customerKey);
@@ -745,7 +753,7 @@ async function main() {
       );
     }
 
-    const legacyOrdersByOrderCode = new Map<number, Order>();
+    const legacyOrdersByOrderCode = new Map<string, Order>();
     const orderCodesList = Array.from(new Set(Array.from(orderCodes.values())));
     if (orderCodesList.length) {
       __stage = "load_legacy_orders_by_order_code";
@@ -774,8 +782,8 @@ async function main() {
           }
         }
         for (const o of list) {
-          const code = Number((o as any).orderCode ?? (o as any).order_code ?? NaN);
-          if (Number.isFinite(code)) legacyOrdersByOrderCode.set(code, o);
+          const code = String((o as any).orderCode ?? (o as any).order_code ?? "").trim();
+          if (code) legacyOrdersByOrderCode.set(code, o);
         }
       }
       console.log(
@@ -908,7 +916,7 @@ async function main() {
       let bulkSkippedNoOrderCode = 0;
       for (const { orderExternalId, orderRows } of entries) {
         const first = orderRows[0]!;
-        const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, first));
+        const orderCode = orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, first));
         if (!orderCode) {
           bulkSkippedNoOrderCode++;
           continue;
@@ -1048,7 +1056,7 @@ async function main() {
       );
     } else {
     console.log(`[databaseB2b:orders] modo incremental: processando ${entries.length} grupos (um a um)`);
-    const loadOrderByOrderCode = async (orderCode: number): Promise<Order | null> => {
+    const loadOrderByOrderCode = async (orderCode: string): Promise<Order | null> => {
       try {
         return await orderRepoNow.findOne({ where: { company: { id: company.id }, orderCode } as any });
       } catch (err) {
@@ -1064,7 +1072,7 @@ async function main() {
       iterated += 1;
       const first = orderRows[0]!;
 
-      const orderCode = toIntLoose(applyFieldMapping(orderFields.order_code, first));
+      const orderCode = orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, first));
       if (!orderCode) continue;
 
       const existing = existingOrdersByExternalId.get(orderExternalId) ?? null;

@@ -34,6 +34,14 @@ export class Plataform {
   @Column({ type: "varchar" })
   name?: string;
 
+  /** URL do logo da plataforma (ex.: para exibição na página de integrações). */
+  @Column({ type: "varchar", nullable: true })
+  logo?: string | null;
+
+  /** URL do site da plataforma (abre em nova guia). */
+  @Column({ type: "varchar", nullable: true })
+  link?: string | null;
+
   @Column({ type: "jsonb" })
   parameters?: PlataformParameter[];
 

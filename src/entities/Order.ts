@@ -22,8 +22,9 @@ export class Order {
   @Column({ type: "varchar", nullable: true, name: "external_id" })
   externalId?: string | null;
 
-  @Column({ type: "integer" })
-  orderCode!: number; // codigoPedido
+  /** Código do pedido na plataforma (pode exceder int32; ex.: Panorama `codigo`). Pode ser NULL no banco (legado / sync). */
+  @Column({ type: "varchar", length: 64, nullable: true })
+  orderCode?: string | null;
 
   // data de criação do pedido (order date)
   // No banco: order_date timestamp NULL
@@ -72,6 +73,14 @@ export class Order {
   // Data de pagamento (Tray: payment_date; Precode: usamos order_date)
   @Column({ type: "date", nullable: true })
   paymentDate?: string | null;
+
+  /** Forma de pagamento (ex.: Panorama `formaPagamento`). */
+  @Column({ type: "varchar", nullable: true, name: "payment_type" })
+  paymentType?: string | null;
+
+  /** Número de parcelas; à vista = 1 quando a API envia null. */
+  @Column({ type: "integer", nullable: true, name: "payment_installments" })
+  paymentInstallments?: number | null;
 
   // Cupom aplicado (Tray: discount_coupon; Precode não tem → null)
   @Column({ type: "varchar", nullable: true })

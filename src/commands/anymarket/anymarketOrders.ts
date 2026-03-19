@@ -394,15 +394,18 @@ async function processOrdersPass(opts: {
     // prefetch orders existentes
     const orderCodes = ordersJson
       .map((o) => pickNumber(o, "id"))
-      .filter((n): n is number => n !== null && Number.isInteger(n) && n > 0);
+      .filter((n): n is number => n !== null && Number.isInteger(n) && n > 0)
+      .map((n) => String(n));
     const existingOrdersArr = orderCodes.length
       ? // eslint-disable-next-line no-await-in-loop
         await withRetry("db find existing orders (page)", () =>
           orderRepo.find({ where: { company: { id: company.id }, orderCode: In(orderCodes) } as any }),
         )
       : [];
-    const existingOrdersByCode = new Map<number, Order>();
-    for (const o of existingOrdersArr) existingOrdersByCode.set(o.orderCode, o);
+    const existingOrdersByCode = new Map<string, Order>();
+    for (const o of existingOrdersArr) {
+      if (o.orderCode != null && o.orderCode !== "") existingOrdersByCode.set(o.orderCode, o);
+    }
 
     // prefetch customers por taxId (externalId = taxId)
     const taxIds = new Set<string>();
@@ -473,8 +476,9 @@ async function processOrdersPass(opts: {
     const orderIdsToReplaceItems: number[] = [];
 
     for (const o of ordersJson) {
-      const orderCode = pickNumber(o, "id");
-      if (!orderCode) continue;
+      const orderCodeNum = pickNumber(o, "id");
+      if (!orderCodeNum) continue;
+      const orderCode = String(orderCodeNum);
 
       const buyer = asRecord(o.buyer ?? null) ?? {};
       const taxId = normalizeCpfCnpj(pickString(buyer, "documentNumberNormalized") ?? pickString(buyer, "document")) ?? `anymarket_buyer:${orderCode}`;

@@ -71,6 +71,20 @@ No comando de pedidos, `--force` repopula os itens a partir da API para todos os
 npm run script:anymarket:orders -- --company=1 --start-date=2026-02-01 --end-date=2026-02-04 --force
 ```
 
+### Panorama
+
+Plataforma `slug=panorama` (e-commerce). Config em `company_platforms.config`: `url` (base até `/v1`), `user` e `token` (Basic Auth: usuário + senha/token). Sincroniza pedidos via `GET /pedido` (paginado); produtos são criados ou encontrados por SKU a partir dos itens do pedido.
+
+```bash
+npm run script:panorama:orders -- --company=1 --start-date=2026-03-01 --end-date=2026-03-30
+```
+
+Opcional: `--onlyInsert` para pular pedidos que já existem (mesmo `order_code`).
+
+```bash
+npm run script:panorama:orders -- --company=1 --start-date=2026-03-01 --end-date=2026-03-30 --onlyInsert
+```
+
 ### Database B2B
 
 Executa 1 comando por entidade e aplica os tratamentos configurados no mapeamento (ex.: `mapear_valores`, `limpeza_regex`, `concatenar_campos`, `usar_um_ou_outro`, `mapear_json`).

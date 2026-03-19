@@ -435,7 +435,7 @@ async function main() {
     const customerPool: Customer[] = existingFakeCustomers.slice();
     let customerSeq = await getNextFakeCustomerSeq(companyId);
 
-    let orderCode = await getNextOrderCode(companyId);
+    let orderCodeSeq = await getNextOrderCode(companyId);
 
     let createdCustomers = 0;
     let createdOrders = 0;
@@ -500,7 +500,10 @@ async function main() {
 
         const orderDate = randomTimeInDayUtc(day);
         const itemCount = Math.random() < 0.7 ? 1 : 2;
-        const pickedProducts = productsShuffled.slice((orderCode + i) % productsShuffled.length, (orderCode + i) % productsShuffled.length + itemCount);
+        const pickedProducts = productsShuffled.slice(
+          (orderCodeSeq + i) % productsShuffled.length,
+          (orderCodeSeq + i) % productsShuffled.length + itemCount,
+        );
         const items: OrderItem[] = [];
 
         const commissionPct = mode === "representante" ? pickOne(COMMISSION_PCTS) : 0;
@@ -535,6 +538,7 @@ async function main() {
         const discount = Math.random() < 0.15 ? randInt(0, 200) : 0;
         const totalAmount = Math.max(0, itemsTotal + shipping - discount);
 
+        const orderCode = String(orderCodeSeq);
         const order = orderRepo.create({
           company,
           orderCode,
@@ -578,7 +582,7 @@ async function main() {
             break;
           } catch (e: any) {
             if (isDeadlock(e) && attempt < maxRetries) {
-              console.warn(`[fake] deadlock ao salvar pedido ${orderCode}, retry ${attempt}/${maxRetries} em 400ms`);
+              console.warn(`[fake] deadlock ao salvar pedido ${orderCodeSeq}, retry ${attempt}/${maxRetries} em 400ms`);
               await sleep(400);
             } else {
               throw e;
@@ -586,7 +590,7 @@ async function main() {
           }
         }
 
-        orderCode += 1;
+        orderCodeSeq += 1;
       }
       console.log(`[fake] ${ymd}: pedidos=${ordersToday}`);
     }

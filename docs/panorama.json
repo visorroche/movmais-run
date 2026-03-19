@@ -1,0 +1,2976 @@
+{
+  "swagger" : "2.0",
+  "info" : {
+    "description" : "<div>Documentação das API's REST para manipulação de dados de pedidos no Panorama E-commerce.</div>Utiliza-se Basic Auth para autenticação.<div></div>",
+    "version" : "1.0",
+    "title" : "API - E-commerce",
+    "contact" : {
+      "name" : "Panorama Sistemas",
+      "email" : "sistemas@panorama.inf.br"
+    },
+    "x-logo" : {
+      "url" : "https://docs.panoramasistemas.com.br/panorama-sistemas.svg"
+    }
+  },
+  "tags" : [
+    {
+      "name" : "pedido",
+      "description" : "Gerenciamento de Pedidos"
+    },
+    {
+      "name" : "carrinho",
+      "description": "Consulta de Carrinhos"
+    },
+    {
+      "name" : "faturamento",
+      "description" : "Operações de Faturamento"
+    },
+    {
+      "name" : "despacho",
+      "description" : "Operações de Despacho"
+    },
+    {
+      "name" : "estoque",
+      "description" : "Gerenciamento de Estoque"
+    },
+    {
+      "name" : "cupom",
+      "description" : "Gerenciamento de Cupom"
+    },
+    {
+      "name" : "preco",
+      "description" : "Gerenciamento de Preços de Venda"
+    },
+    {
+      "name": "chatbot externo",
+      "description": "Utilitários para ChatsBot externos. Exemplo: OmniChat"
+    },
+    {
+      "name" : "CHANGELOG",
+      "description" : "Atualizações da API<div><br /><ul><li>11-08-2022 - Adicionado na consulta de pedidos (GET /pedido) as informações de tipo e situacaoCadastro. Lista dos códigos disponível na documentação. </li><li>14-12-2022 - Adicionado método para envio da NF-e do Pedido de Venda. Adicionado método para alterar a situação do Pedido de Venda. Adicionado opção de definição de quantidade de estoque físico.</li><li>09-01-2023 - Na consulta de pedidos adicioando as informações de: depósito de empenho, pagamento, origem e valor de frete da transportadora.</li><li>27-02-2023 - Nova funcionalidade Emissão de Etiqueta.</li><li>16-03-2023 - Novas funcionalidades de Emissão de DANFE e Rastreio de NF-e. <br />Alterado disposição na documentação das funcionalidades de Envio de NF-e(XML) e Emissão de Etiqueta</li><li>21-03-2023 - Novas funcionalidades de despacho (Carregamento)</li><li>19-04-2023 - Tag marketplace na consulta de pedidos</li><li>19-05-2023 - Adicionado funcionalide para realizar download do XML da NF-e do pedido.<br />Adicionado funcionalidade de envio de objetos de postagem, para fluxo completo do correios.</li><li>05-06-2023 - Adicionado informação de data limite de entrega de pedidos.</li><li>29-08-2023 - Filtrar consulta de pedidos pelo documento do cliente (CPF ou CNPJ).</li><li>21-11-2023 - Adicionada porta para consulta de carrinhos.</li</ul></div>"
+    }
+  ],
+  "paths" : {
+    "/preco-venda": {
+      "get": {
+        "tags" : [ "preco" ],
+        "summary": "Consulta de Preços de Venda",
+        "description": "Consulta Preços de Venda. Apenas os preços que já foram publicados para os canais de venda através da atualização da View de Preços, ou seja, que aparecem na consulta Padrão de Preços.",
+        "parameters": [
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "limite",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50,
+            "description": "Limite de registro por página."
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "pagina",
+            "default": 1,
+            "description": "Pagina desejada dos registro(s)"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "sku",
+            "description": "Filtro dos códigos SKU desejados. Exemplo: [\"454\",\"32\"]"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "ean",
+            "description": "Filtro de códigos EAN desejados. Exemplo: [\"7895472139807\",\"7895475559807\"]"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "loja",
+            "description": "Filtro do identificador da loja/canal de venda desejado. Exemplo: 10"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "tabela",
+            "description": "Filtro do identificador da tabela de preço desejada. Exemplo: 1"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dados de Preços de Venda",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "description": "Registros de Preços de Venda",
+                  "items": {
+                    "$ref": "#/definitions/PrecoVenda"
+                  }
+                },
+                "pagina": {
+                  "type": "integer",
+                  "description": "Página atual"
+                },
+                "registro_por_pagina": {
+                  "type": "integer",
+                  "description": "Quantidade de registros por páginas"
+                },
+                "pagina_total": {
+                  "type": "integer",
+                  "description": "Total de páginas disponíveis"
+                },
+                "total": {
+                  "type": "integer",
+                  "description": "Total de registros localizados"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/cupom": {
+      "get": {
+        "tags" : [ "cupom" ],
+        "summary": "Consulta de Cupons de Desconto",
+        "description": "Consulta Cupons de Desconto. <br /><pre>Tipos de Cupons\n1 - Desconto Percentual\n2 - Desconto Fixo\n3 - Define Valor de Venda\n4 - Desconto Fixo Gradativo\n5 - Define Valor de Venda Gradativo\n6 - Desconto Percentual Gradativo\n7 - Define Preço por Unidade\n8 - Leve X pague Y",
+        "parameters": [
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "limite",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50,
+            "description": "Limite de registro por página."
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "pagina",
+            "default": 1,
+            "description": "Pagina desejada dos registro(s)"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "tipo",
+            "description": "Filtro dos tipos de cupons desejados. Exemplo: [1,2]"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dados do Cupom de Desconto",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "description": "Registros de Cupom de Desconto",
+                  "items": {
+                    "$ref": "#/definitions/Cupom"
+                  }
+                },
+                "pagina": {
+                  "type": "integer",
+                  "description": "Página atual"
+                },
+                "registro_por_pagina": {
+                  "type": "integer",
+                  "description": "Quantidade de registros por páginas"
+                },
+                "pagina_total": {
+                  "type": "integer",
+                  "description": "Total de páginas disponíveis"
+                },
+                "total": {
+                  "type": "integer",
+                  "description": "Total de registros localizados"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/estoque": {
+      "get": {
+        "tags" : [ "estoque" ],
+        "summary": "Consulta de Estoque",
+        "description": "Consulta estoque do produto",
+        "parameters": [
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "limite",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50,
+            "description": "Limite de registro por página."
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "pagina",
+            "default": 1,
+            "description": "Pagina desejada dos registro(s)"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "produto",
+            "description": "Código(SKU) do produto na plataforma da panorama"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "deposito",
+            "description": "Identificador (#) do depósito na plataforma da panorama"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dados do estoque",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "description": "Registros de estoque",
+                  "items": {
+                    "$ref": "#/definitions/Estoque"
+                  }
+                },
+                "pagina": {
+                  "type": "integer",
+                  "description": "Página atual"
+                },
+                "registro_por_pagina": {
+                  "type": "integer",
+                  "description": "Quantidade de registros por páginas"
+                },
+                "pagina_total": {
+                  "type": "integer",
+                  "description": "Total de páginas disponíveis"
+                },
+                "total": {
+                  "type": "integer",
+                  "description": "Total de registros localizados"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      },
+      "post": {
+        "tags" : [ "estoque" ],
+        "summary": "Movimentar Estoque",
+        "description": "Movimentar estoque para um produto e depósito específico",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "title": "Informações necessárias para movimentação",
+              "required": ["produto","deposito","tipo","operacao","quantidade"],
+              "properties": {
+                "produto": {
+                  "type": "string",
+                  "description": "Código(SKU) do produto na plataforma da panorama<br/>Caso seja informado o parametro Referência, esse campo se torna não obrigatório"
+                },
+                "referencia": {
+                  "type": "string",
+                  "description": "Código(Referência) do produto na plataforma da panorama"
+                },
+                "deposito": {
+                  "type": "integer",
+                  "description": "Identificador (#) do depósito na plataforma da panorama"
+                },
+                "tipo": {
+                  "type": "integer",
+                  "description": "Tipo da Movimentação desejada. <pre>1 - Físico\n2 - Reserva\n3 - Previsto</pre>"
+                },
+                "operacao": {
+                  "type": "integer",
+                  "description": "Tipo de operação desejada. <pre>1 - Entrada\n2 - Saída\n3 - Definir Quantidade Informada¹</pre><small>¹ Operação utilizada para definir a quantidade de estoque. Basicamente ajusta o movimento para que o resultado do estoque seja o informado na movimentação. Somente aplicável para o tipo de movimento Físico.</small> "
+                },
+                "quantidade": {
+                  "type": "integer",
+                  "description": "Quantidade da movimentação"
+                },
+                "valorMovimento": {
+                  "type": "number",
+                  "description": "Valor do movimento para movimentações do tipo Físico com gerenciamento de custo médio. Se o cliente realiza o gerenciamento de custo nas movimentações de entrada essa informação sera obrigatória."
+                },
+                "observacao": {
+                  "type": "string",
+                  "description": "Observação da movimentação"
+                },
+                "dataHoraPrevisto": {
+                  "type": "string",
+                  "description": "Data/Hora prevista do estoque para quando movimentações do tipo Previsto.<br/>Enviar no Formato (Y-m-d H:i:s)"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta da operação",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "description": "Situação da operacao"
+                },
+                "success": {
+                  "type": "boolean",
+                  "description": "Página atual"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem da operação"
+                },
+                "movimento": {
+                  "type": "integer",
+                  "description": "Identificador (#) da movimentação gerada pela api"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/pedido": {
+      "get": {
+        "tags" : [ "pedido" ],
+        "summary": "Consulta de Pedidos",
+        "description": "Consulta páginada de pedidos de venda. <br /><pre>Lista de Códigos das Situações\n1 - Aguardando Pagamento\n2 - Cancelado\n3 - Pagamento Confirmado\n4 - Em Separação\n5 - Nota Fiscal Emitida\n6 - Transporte\n7 - Entregue\n8 - Problemas no Transporte\n9 - Faturado Parcial\n10 - Etiqueta Transporte Gerada\n11 - Pagamento em Análise\n12 - Cancelado Operadora\n13 - Nota Fiscal Cancelada\n14 - Devolução\n15 - Liberado para Faturamento\n16 - Em Cancelamento\n17 - Problema com Estoque\n18 - Em Atendimento\n</pre><pre>Lista de Códigos das Formas de Pagamento\nboleto          - Boleto\nboletoParcelado - Boleto Parcelado\ncartaoCredito   - Cartão de Crédito\npix             - Pix\ncompensacaoDevolucao - Compensação de Devolução\nvoucher              - Vouncher </pre><pre>Lista Códigos Tipo do Pedido\n1 - Tipo Venda (normal)\n2 - Tipo Pedido de Troca\n3 - Tipo Venda de Comissão\n4 - Tipo Pedido de Cotação</pre><pre>Lista Situação de Cadastro\n1 - Situação Cadastro em Cotação\n2 - Situação Cadastro Finalizado</pre>",
+        "parameters": [
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "limite",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50,
+            "description": "Limite de registro por página. <br />"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "pagina",
+            "default": 1,
+            "description": "Pagina desejada dos registro(s)"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "ordenacao",
+            "description": "Tipo de ordenação desejada",
+            "enum": ["asc" ,"desc"]
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "situacao",
+            "description": "Lista de códigos da situação do pedido. Exemplo: [1,2]"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "formaPagamento",
+            "description": "Lista de códigos da forma de pagamento. Exemplo: [\"boleto\",\"pix\"]"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "format": "Y-m-d\\TH:i:sP",
+            "name": "dataHoraInicio",
+            "required": false,
+            "description": "Data/Hora maior igual que a informada."
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "format": "Y-m-d\\TH:i:sP",
+            "name": "dataHoraFim",
+            "required": false,
+            "description": "Data/Hora menor igual que a informada"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "codigoPedido",
+            "description": "Código do Pedido"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "origem",
+            "description": "Filtro da origem do pedido.<br />1 - Site<br />2- Marketplace<br />3 - Cadastrado"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "estados",
+            "description": "Lista de estados (siglas) do pedido. Exemplo: [\"SP\",\"MG\"]"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "cpfCnpj",
+            "description": "Filtrar pedidos pelo documento (CPF ou CNPJ) do cliente."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista pedidos localizados na consulta",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "description": "Registros de pedidos",
+                  "items": {
+                    "$ref": "#/definitions/Pedido"
+                  }
+                },
+                "pagina": {
+                  "type": "integer",
+                  "description": "Página atual"
+                },
+                "registro_por_pagina": {
+                  "type": "integer",
+                  "description": "Quantidade de registros por páginas"
+                },
+                "pagina_total": {
+                  "type": "integer",
+                  "description": "Total de páginas disponíveis"
+                },
+                "total": {
+                  "type": "integer",
+                  "description": "Total de registros localizados"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/pedido/{codigo-pedido}/situacao": {
+      "put": {
+        "tags" : [ "pedido" ],
+        "summary": "Situação do Pedido",
+        "description": "Utilize esse método para alteraração da situação do pedido. Consultar a lista de códigos da situação do pedido dentro do gerenciador administrativo da plataforma e-commerce.",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo-pedido",
+            "description": "Campo \"codigo\" da Consulta de Pedido de Venda",
+            "required": true
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "title": "Informar o código da situação desejada",
+              "required": ["codigo-situacao"],
+              "properties": {
+                "codigo-situacao": {
+                  "type": "string",
+                  "example": "1",
+                  "description": "Código da Situação do Pedido. Consulte a lista situações do pedido no gerenciador administrativo, utilize o campo código."
+                },
+                "observacao": {
+                  "type": "string",
+                  "example": "",
+                  "description": "Caso desejar descrever alguma informação relevante a operação realizada."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/pedido/{codigo-pedido}/nota-fiscal": {
+      "post": {
+        "tags" : [ "faturamento" ],
+        "summary": "Envio de NF-e (XML)",
+        "description": "Envio do XML da NF-e do pedido de venda.<br /> Essa operação altera a situação do pedido de venda para <strong>Nota Fiscal Emitida</strong>.<br />Apenas informar o XML no corpo da requisição. <pre>Lista de Códigos das Operações do Pedido de Venda:<br />1 - Cancelar o Pedido de Venda<br />2 - Reabrir o Pedido de Venda<br />3 - Não Alterar o Pedido de Venda<br />6 - Devolver Pedido de Venda</pre><pre>Lista de Códigos das Operações da Nota Fiscal:<br />1 - Nota Venda<br />2 - Nota de Devolução</pre>",
+        "parameters": [
+          {
+            "name": "codigo-pedido",
+            "in": "path",
+            "description": "Campo \"codigo\" da Consulta de Pedido de Venda",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "tipo_operacao_nota",
+            "description": "Define o tipo de operação da Nota Fiscal associada ao pedido",
+            "required": false,
+            "default": 1
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "tipo_operacao_pedido",
+            "description": " Define a ação a ser aplicada ao pedido de venda ao processar a Nota Fiscal. É utilizado somente em casos de devolução.",
+            "required": false,
+            "default": 1
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "description": "XML da NF-e",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema no envio da NF-e",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro. Lista de códigos: <ol><li>Não localizado o pedido de venda</li><li>Situação do pedido de venda é inválida para envio da NF-e</li><li>Destinatário da NF-e diverge do cliente do pedido de venda</li><li>Não localizado entidade de emissão configurada. Verificar configurações ou emissor enviado.</li><li>Relacionamento entre Itens da Nota Fiscal x Itens do Pedido inconsistente</li><li>Erro ao carregar o DomDocument (XML Inválido)</li><li>Não localizado a nota de origem da devolução!</li><li>Não foi localizada a configuração da CFOP!</li></ol>"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      },
+      "get": {
+        "tags" : [ "faturamento" ],
+        "summary": "Download de NF-e (XML)",
+        "description": "Download do XML da NF-e emitida para o pedido. <br />É retornado um arquivo \".zip\" contendo os respectivos xml's do pedido de venda (caso tenha múltiplas notas).",
+        "parameters": [
+          {
+            "name": "codigo-pedido",
+            "in": "path",
+            "description": "Campo \"codigo\" da Consulta de Pedido de Venda",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "completo",
+            "default": false,
+            "description": "Permite trazer todas as notas do Pedido, tais como as de Devolução. <br />"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Localizado e gerado arquivo com sucesso.",
+            "schema": {
+              "type": "file"
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro. Lista de códigos: <ol><li>Não localizado o pedido de venda</li><li>Situação do pedido de venda é inválida para download de XML (Pedido não faturado)</li></ol>"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/pedido/{codigo-pedido}/etiqueta": {
+      "get": {
+        "tags" : [ "faturamento" ],
+        "summary": "Emissão de Etiqueta",
+        "description": "",
+        "parameters": [
+          {
+            "name": "codigo-pedido",
+            "in": "path",
+            "description": "Campo \"codigo\" da Consulta de Pedido de Venda",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "chave",
+            "in": "query",
+            "description": "Chave da NF-e para filtro quando o pedido possui mais de uma NF-e",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Etiqueta gerada com sucesso. Download do arquivo em formato PDF",
+            "schema": {
+              "type": "file"
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro. Lista de códigos: <ol><li>Não localizado o pedido de venda</li><li>Situação do pedido de venda é inválida para envio da NF-e</li><li>Destinatário da NF-e diverge do cliente do pedido de venda</li><li>Não localizado entidade de emissão configurada. Verificar configurações ou emissor enviado.</li><li>Relacionamento entre Itens da Nota Fiscal x Itens do Pedido inconsistente</li><li>Erro ao carregar o DomDocument (XML Inválido)</li></ol>"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/pedido/{chave-nfe}/danfe": {
+      "get": {
+        "tags" : [ "faturamento" ],
+        "summary": "Emissão de DANFE",
+        "description": "DANFE - Documento Auxiliar da Nota Fiscal Eletrônica",
+        "parameters": [
+          {
+            "name": "chave-nfe",
+            "in": "path",
+            "description": "Chave da NF-e do Pedido de Venda",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "modelo",
+            "in": "query",
+            "description": "Tipo de Modelo DANFE desejado. <br />Caso não seja informado será enviado o padrão configurado na plataforma. <br /><br /> <strong>padrao</strong> - Modelo Padrão de DANFE dimensões para folha A4.<br /> <strong>simplificado</strong> - Modelo resumido para envio em impressoras térmicas (dimensões da etiqueta de transporte).",
+            "required": false,
+            "type": "string",
+            "enum": ["padrao","simplificado"]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Danfe gerada com sucesso. Download do arquivo em formato PDF",
+            "schema": {
+              "type": "file"
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro. Lista de códigos: <ol><li>Não localizado o pedido de venda</li><li>Situação do pedido de venda é inválida para envio da NF-e</li><li>Destinatário da NF-e diverge do cliente do pedido de venda</li><li>Não localizado entidade de emissão configurada. Verificar configurações ou emissor enviado.</li><li>Relacionamento entre Itens da Nota Fiscal x Itens do Pedido inconsistente</li><li>Erro ao carregar o DomDocument (XML Inválido)</li></ol>"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/pedido/{chave-nfe}/rastreio": {
+      "get": {
+        "tags" : [ "faturamento" ],
+        "summary": "Rastreio NF-e",
+        "description": "Busca informações de rastreio da NF-e.",
+        "parameters": [
+          {
+            "name": "chave-nfe",
+            "in": "path",
+            "description": "Chave da NF-e do Pedido de Venda para rastreio",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Informações de Rastreio",
+            "schema": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "description": "Informações de Rastreio",
+                  "$ref": "#/definitions/PedidoNotaFiscalRastreio"
+                },
+                "success": {
+                  "type": "boolean",
+                  "description": "Localizado registro?"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da pesquisa"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "Status da operação"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/carrinho": {
+      "get": {
+        "tags": [ "carrinho" ],
+        "summary": "Consulta de Carrinhos",
+        "description": "Consulta paginada de carrinhos",
+        "parameters": [
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "limite",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50,
+            "description": "Limite de registro por página. <br />"
+          },
+          {
+            "in": "query",
+            "type": "integer",
+            "name": "pagina",
+            "default": 1,
+            "description": "Pagina desejada dos registro(s)"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "ordenacaoTipo",
+            "description": "Tipo de ordenação desejada",
+            "default": "desc",
+            "enum": ["asc" ,"desc"]
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "name": "ordenacao",
+            "description": "Ordenação desejada: por ordem de criação ou atualização",
+            "enum": ["criadoEm", "atualizadoEm"]
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "format": "dateTime - Y-m-d\\TH:i:sP",
+            "name": "atualizadoEmInicio",
+            "description": "Filtra a partir da data/hora informada para o campo atualizadoEm"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "format": "dateTime - Y-m-d\\TH:i:sP",
+            "name": "atualizadoEmFim",
+            "description": "Filtra até a data/hora informada para o campo atualizadoEm"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "format": "dateTime - Y-m-d\\TH:i:sP",
+            "name": "criadoEmInicio",
+            "description": "Filtra a partir da data/hora informada para o campo criadoEm"
+          },
+          {
+            "in": "query",
+            "type": "string",
+            "format": "dateTime - Y-m-d\\TH:i:sP",
+            "name": "criadoEmFim",
+            "description": "Filtra até a data/hora informada para o campo criadoEm"
+          },
+          {
+            "in": "query",
+            "type": "boolean",
+            "name": "carrinhoAbandonado",
+            "description": "True para apenas carrinhos abandonados, false para apenas carrinhos que deram origem a pedidos"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista carrinhos localizados na consulta",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "array",
+                  "description": "Registros de carrinho",
+                  "items": {
+                    "$ref": "#/definitions/Carrinho"
+                  }
+                },
+                "pagina": {
+                  "type": "integer",
+                  "description": "Página atual"
+                },
+                "registro_por_pagina": {
+                  "type": "integer",
+                  "description": "Quantidade de registros por páginas"
+                },
+                "pagina_total": {
+                  "type": "integer",
+                  "description": "Total de páginas disponíveis"
+                },
+                "total": {
+                  "type": "integer",
+                  "description": "Total de registros localizados"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/carregamento": {
+      "post": {
+        "tags" : [ "despacho" ],
+        "summary": "Novo Carregamento",
+        "description": "Criação/abertura de um novo carregamento. <br /><br />A definição da transportadora do carregamento será realizada na bipagem da primeira NF-e se o parâmetro <b>transporte_proprio</b> não for informado.<br /><br />Se o parâmetro <b>transporte_proprio</b> for informado, a transportadora será a da empresa do login. <br /><br />Após isso todas as NF-e desse carregamento devem pertencer a mesma transportadora.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "title": "",
+              "properties": {
+                "transporte_proprio": {
+                  "type": "boolean",
+                  "description": "Transporte Próprio?"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Informações do carregamento criado",
+            "schema": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "description": "Informações do Carregamento",
+                  "$ref": "#/definitions/Carregamento"
+                },
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/carregamento/{codigo}": {
+      "get": {
+        "tags" : [ "despacho" ],
+        "summary": "Buscar Carregamento",
+        "description": "Buscar as informações do carregamento",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo",
+            "description": "Campo \"codigo\" do Carregamento",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta da operação",
+            "schema": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "description": "Informações do Carregamento",
+                  "$ref": "#/definitions/Carregamento"
+                },
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/carregamento/{codigo}/bipar": {
+      "post": {
+        "tags" : [ "despacho" ],
+        "summary": "Bipar NF-e",
+        "description": "Associar NF-e no carregamento. <br />Lembrando que a definição da transportadora do carregamento será realizada na bipagem da primeira NF-e do carregamento.<br />Após isso todas as NF-e desse carregamento devem pertencer a mesma transportadora",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo",
+            "description": "Campo \"codigo\" do Carregamento",
+            "required": true
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "title": "Chaves a serem bipadas",
+              "properties": {
+                "chave": {
+                  "type": "string",
+                  "description": "Chave da NF-e"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta da operação",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/carregamento/{codigo}/coletar": {
+      "put": {
+        "tags" : [ "despacho" ],
+        "summary": "Solicitar Coleta",
+        "description": "Solicitar coleta para o carregamento.",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo",
+            "description": "Campo \"codigo\" do Carregamento",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta da operação",
+            "schema": {
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "description": "Informações do Carregamento",
+                  "$ref": "#/definitions/Carregamento"
+                },
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/carregamento/{codigo}/finalizar": {
+      "put": {
+        "tags" : [ "despacho" ],
+        "summary": "Finalizar Carregamento",
+        "description": "Finalizar o carregamento",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo",
+            "description": "Campo \"codigo\" do Carregamento",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta da operação",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/{chave-nfe}/objeto-postagem": {
+      "post": {
+        "tags" : [ "despacho" ],
+        "summary": "Objetos de Postagem",
+        "description": "Envio de informações dos objetos/volumes de postagem da NF-e. <br />Utilize essa operação para informações específicas das dimensões de transporte do seu despacho.<br /> Caso não seja informado utilizaremos as informações contidas da NF-e e do  cadastro de produtos dos respectivos items.<br /><strong>IMPORTANTE:</strong> Realizar o envio dessas informações antes de realizar a solicitação/geração de etiquetas.<br />Cada objeto de postagem corresponde a um volume relacionado ao despacho da nota fiscal.",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "chave-nfe",
+            "description": "Chave da NF-e",
+            "required": true
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ObjetoPostagem"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resposta da operação",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/faturamento/carregamento/{codigo}/comprovante": {
+      "post": {
+        "tags" : [ "despacho" ],
+        "summary": "Enviar Comprovante",
+        "description": "Permite o envio do comprovante de carregamento. <br /> O comprovante deve ser enviado no body, no parâmetro <b>comprovante</b>.",
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo",
+            "description": "Campo \"codigo\" do Carregamento",
+            "required": true
+          },
+          {
+            "in": "formData",
+            "name": "comprovante",
+            "type": "file",
+            "description": "Arquivo do Comprovante"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comprovante Enviado com Sucesso!",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO/PROCESSADO - @deprecated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Ocorreu algum problema.",
+            "schema": {
+              "type": "object",
+              "description": "Para quando ocorrer um erro na consulta",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem de retorno"
+                },
+                "codeError": {
+                  "type": "integer",
+                  "description": "Código do motivo do erro."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. Erros com códigos não catalogados.",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/situacao-pedido/{codigo-pedido}": {
+      "get": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Situação de Pedidos ",
+        "description": "Consulta Situação de Pedidos",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo-pedido",
+            "description": "Código do pedido",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "message": {
+                  "type": "String",
+                  "description": "Mensagem de retorno da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "situacao-codigo": {
+                  "type": "integer",
+                  "description": "3"
+                },
+                "situacao-nome": {
+                  "type": "string",
+                  "description": "Pagamento Confirmado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Pedido não localizado.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/situacao-pedido}": {
+      "post": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Situação de Pedidos ",
+        "description": "Consulta Situação de Pedidos",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "codigo_pedido",
+            "schema": {
+              "type": "object",
+              "title": "Informações necessárias para movimentação",
+              "required": [
+                "codigo-pedido"
+              ],
+              "properties": {
+                "codigo-pedido": {
+                  "type": "integer",
+                  "description": "codigo do pedido",
+                  "example": "2101999999"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "String",
+                  "description": "Informa se operação ocorreu corretamente"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "situacao-codigo": {
+                  "type": "integer",
+                  "description": "3"
+                },
+                "situacao-nome": {
+                  "type": "string",
+                  "description": "Pagamento Confirmado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Pedido não localizado.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/rastreio-pedido/{codigo-pedido}": {
+      "get": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Rastreio de Pedidos ",
+        "description": "Consultar o Rastreio de Pedidos",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo-pedido",
+            "description": "Código do pedido",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Informa se a operação ocorreu corretamente"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "url-rastreio": {
+                  "type": "string",
+                  "description": "URL do Rastreio do Pedido "
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Pedido não localizado.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro ",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/rastreio-pedido": {
+      "post": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Rastreio de Pedidos ",
+        "description": "Consultar o Rastreio de Pedidos",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "codigo_pedido",
+            "schema": {
+              "type": "object",
+              "title": "Informações necessárias para movimentação",
+              "required": [
+                "codigo-pedido"
+              ],
+              "properties": {
+                "codigo-pedido": {
+                  "type": "integer",
+                  "description": "codigo do pedido",
+                  "example": "2101999999"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Informa se a operação ocorreu corretamente"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "url-rastreio": {
+                  "type": "string",
+                  "description": "URL do Rastreio do Pedido "
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Pedido não localizado.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro ",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Mensagem da operação"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/boleto-pedido/{codigo-pedido}": {
+      "get": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Remissão de Boletos ",
+        "description": "Consultar a Remissão de Boletos",
+        "parameters": [
+          {
+            "in": "path",
+            "type": "string",
+            "name": "codigo-pedido",
+            "description": "Código do pedido",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Informa se a operação ocorreu corretamente"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "url-boleto": {
+                  "type": "string",
+                  "description": "URL do rastreio do boleto "
+                },
+                "copia-cola": {
+                  "type": "string",
+                  "description": "linha digitável para pagamento boleto ou pix"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Boleto não localizado.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro ",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Boleto não está disponivel"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/boleto-pedido": {
+      "post": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Remissão de Boletos ",
+        "description": "Consultar a Remissão de Boletos",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "codigo_pedido",
+            "schema": {
+              "type": "object",
+              "title": "Informações necessárias para movimentação",
+              "required": [
+                "codigo-pedido"
+              ],
+              "properties": {
+                "codigo-pedido": {
+                  "type": "string",
+                  "description": "codigo do pedido",
+                  "example": "2101999999"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Informa se a operação ocorreu corretamente"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "url-boleto": {
+                  "type": "string",
+                  "description": "URL do rastreio do boleto "
+                },
+                "copia-cola": {
+                  "type": "string",
+                  "description": "linha digitável para pagamento boleto ou pix"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Boleto não localizado.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro ",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Boleto não está disponivel"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    },
+    "/chatbot/sac-cliente": {
+      "post": {
+        "tags": [
+          "chatbot externo"
+        ],
+        "summary": "Consulta Sac Cliente ",
+        "description": "Essa consulta retorna todos os pedidos ativos do cliente, ou seja, pedidos que não foram cancelados.",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "schema": {
+              "type": "object",
+              "title": "Informações necessárias para movimentação",
+              "required": [
+                "cpfCnpj",
+                "Limite"
+              ],
+              "properties": {
+                "cpf-cnpj-cliente": {
+                  "example": "123.456.789.00",
+                  "type": "string",
+                  "description": "Filtrar pedidos pelo documento (CPF ou CNPJ) do cliente."
+                },
+                "limite": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1,
+                  "description": "Limite de registro por página. <br />"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retorno da Operação.",
+            "schema": {
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "true"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Informa se a operação ocorreu corretamente"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "PROCESSADO"
+                },
+                "cliente-codigo": {
+                  "type": "integer",
+                  "description": "Informa o codigo do cliente. Exemplo: 1012111"
+                },
+                "cliente-nome": {
+                  "type": "string",
+                  "description": "informa o nome do cliente. Exemplo: Jéssica Borghesan"
+                },
+                "pedidos-ativos": {
+                  "type": "array",
+                  "description": "Retorno pedido ativo",
+                  "items": {
+                    "$ref": "#/definitions/PedidoAtivo"
+                  }
+                }
+              }
+            }
+          },
+       "422": {
+            "description": "Não localizado informações.",
+            "schema": {
+              "type": "object",
+              "description": "Informa se a operação ocorreu um erro ",
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "description": "false"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Não localizado informações"
+                },
+                "status": {
+                  "type": "string",
+                  "description": "ERRO"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Problemas com comunicação com a api. ",
+            "schema": {
+              "$ref": "#/definitions/ResponseOperationError"
+            }
+          }
+        }
+      }
+    }
+  },
+  "securityDefinitions" : {
+    "basicAuth" : {
+      "type" : "basic"
+    }
+  },
+  "security": [{
+    "basicAuth": []
+  }],
+  "definitions" : {
+    "Estoque": {
+      "type" : "object",
+      "properties" : {
+        "quantidadeFisica" : {
+          "type" : "integer",
+          "description" : "Quantidade física do estoque"
+        },
+        "quantidadeReservado" : {
+          "type" : "integer",
+          "description" : "Quantidade reservada"
+        },
+        "quantidadePrevistaEntrada" : {
+          "type" : "integer",
+          "description" : "Quantidade prevista para entrada"
+        },
+        "quantidadeDisponivel" : {
+          "type" : "integer",
+          "description" : "Saldo da quantidade disponível para venda"
+        },
+        "custoMedio" : {
+          "type" : "number",
+          "description" : "Valor do custo médio atual"
+        },
+        "deposito" : {
+          "type" : "integer",
+          "description" : "Identificador (#) do depósito"
+        },
+        "produto" : {
+          "type" : "string",
+          "description" : "Sku do produto"
+        },
+        "referencia" : {
+          "type" : "string",
+          "description" : "Referência do produto"
+        },
+        "dataHoraPrevistaEntrada" : {
+          "type" : "string",
+          "description" : "Data e hora prevista para entrada"
+        }
+      }
+    },
+    "PedidoAtivo" : {
+      "type": "object",
+      "properties": {
+        "codigo": {
+          "type": "integer",
+          "description": "Codigo do pedido"
+        },
+        "situacao-codigo": {
+          "type": "integer",
+          "description": "Informa a situação por codigo. Exemplo: '7'"
+        },
+        "situacao-nome": {
+          "type": "integer",
+          "description": "Informa a situação por nome. Exemplo: 'Entregue'"
+        },
+        "data-hora": {
+          "type": "string",
+          "description": "Informa a data do pedido. Exemplo:'2021-07-19 14:04:07-03'"
+        }
+      }
+    },
+    "Pedido" : {
+      "type" : "object",
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador do Registro"
+        },
+        "codigo" : {
+          "type" : "string",
+          "description" : "Código do Pedido"
+        },
+        "loja" : {
+          "$ref" : "#/definitions/Loja"
+        },
+        "marketplace": {
+          "type": "object",
+          "description": "Informações para quando o pedido é de marketplace",
+          "properties": {
+            "loja" : {
+              "$ref" : "#/definitions/Loja"
+            },
+            "marketplace": {
+              "$ref" : "#/definitions/Marketplace"
+            },
+            "codigo" : {
+              "type" : "string",
+              "description" : "Código do Pedido no Marketplace"
+            }
+          }
+        },
+        "valorProduto" : {
+          "type" : "number",
+          "description" : "Valor dos Produtos"
+        },
+        "valorFrete" : {
+          "type" : "number",
+          "description" : "Valor Total do Frete do Pedido (cliente)"
+        },
+        "valorAcrescimo" : {
+          "type" : "number",
+          "description" : "Valor Acrescimo"
+        },
+        "valorDesconto" : {
+          "type" : "number",
+          "description" : "Valor Desconto"
+        },
+        "valorTotal" : {
+          "type" : "number",
+          "description" : "Valor Total"
+        },
+        "dataHora" : {
+          "type" : "string",
+          "format" : "dateTime",
+          "description" : "Data/Hora do Pedido"
+        },
+        "formaPagamento" : {
+          "type" : "string",
+          "format" : "string",
+          "description" : "Forma de Pagamento"
+        },
+        "formaPagamentoCodigo" : {
+          "type" : "string",
+          "format" : "string",
+          "description" : "Código da Forma de Pagamento"
+        },
+        "condicaoPagamento" : {
+          "type" : "string",
+          "format" : "string",
+          "description" : "Condição de Pagamento"
+        },
+        "condicaoPagamentoCodigo" : {
+          "type" : "string",
+          "format" : "string",
+          "description" : "Código da Condição de Pagamento"
+        },
+        "situacaoCodigo": {
+          "type" : "integer",
+          "format" : "string",
+          "description" : "Codigo da Situação."
+        },
+        "situacaoNome": {
+          "type" : "string",
+          "format" : "string",
+          "description" : "Nome da Situação."
+        },
+        "tipo": {
+          "type" : "integer",
+          "format" : "string",
+          "description" : "Tipo do Pedido"
+        },
+        "situacaoCadastro": {
+          "type" : "integer",
+          "format" : "string",
+          "description" : "Situação de Cadastro"
+        },
+        "observacaoCheckout": {
+          "type" : "string",
+          "format" : "string",
+          "description" : "Observação Informada no Checkout"
+        },
+        "cliente" : {
+          "$ref" : "#/definitions/Pessoa"
+        },
+        "endereco" : {
+          "$ref" : "#/definitions/Endereco"
+        },
+        "itens" : {
+          "type" : "array",
+          "items" : {
+            "$ref" : "#/definitions/PedidoItem"
+          }
+        },
+        "transporte" : {
+          "$ref" : "#/definitions/Transporte"
+        },
+        "pedidoPagamento" : {
+          "description" : "Detalhes das informações de pagamento do pedido",
+          "$ref" : "#/definitions/PedidoPagamento"
+        },
+        "origem" : {
+          "description" : "Cupons e Tags de Marketing",
+          "$ref" : "#/definitions/PedidoOrigem"
+        },
+        "notasFiscais" : {
+          "type" : "array",
+          "items" : {
+            "$ref" : "#/definitions/NotaFiscal"
+          }
+        }
+      }
+    },
+    "PedidoItem" : {
+      "properties" : {
+        "sku" : {
+          "type" : "string",
+          "description" : "SKU"
+        },
+        "descricao" : {
+          "type" : "string",
+          "description" : "Nome completo do produto"
+        },
+        "referencia" : {
+          "type" : "string",
+          "example" : "Referência do Produto"
+        },
+        "ean" : {
+          "type" : "string",
+          "example" : "EAN do Produto"
+        },
+        "quantidade" : {
+          "type" : "integer",
+          "description" : "Quantidade de Itens"
+        },
+        "valorUnitario" : {
+          "type" : "number",
+          "description" : "Valor Unitário do Item"
+        },
+        "valorAcrescimo" : {
+          "type" : "number",
+          "description": "Valor de Acréscimo"
+        },
+        "valorDesconto" : {
+          "type" : "number",
+          "description": "Valor de Desconto"
+        },
+        "valorFrete" : {
+          "type" : "number",
+          "description": "Valor de Frete"
+        },
+        "valorTotal" : {
+          "type" : "number",
+          "description": "Valor Total do Item"
+        },
+        "deposito" : {
+          "description": "Depósito de empenho do item",
+          "$ref" : "#/definitions/Deposito"
+        }
+      }
+    },
+    "NotaFiscal" :  {
+      "properties": {
+        "tipo" : {
+          "type" : "integer",
+          "description" : "Tipo da nota fiscal",
+          "enum": [{"1":"Nota de Venda"},{"2":"Nota de Remessa"}]
+        },
+        "serie" : {
+          "type" : "string",
+          "description" : "Série da nota fiscal"
+        },
+        "numero" : {
+          "type" : "integer",
+          "description" : "Número da nota fiscal"
+        },
+        "chave" : {
+          "type": "string",
+          "description" : "Chave da nota fiscal"
+        },
+        "cnpj" : {
+          "type" : "string",
+          "example": "12.345.678/9012-34",
+          "description" : "CNPJ do emissor da nota fiscal"
+        },
+        "dataEmissao" : {
+          "type" : "string",
+          "format": "dateTime",
+          "example": "2024-01-01 10:10:10-03",
+          "description" : "Data/Hora de emissão da nota fiscal"
+        }
+      }
+    },
+    "Carrinho": {
+      "properties": {
+        "codigoPedido": {
+          "type": "string",
+          "description": "Código do pedido de venda com origem no carrinho"
+        },
+        "pessoa": {
+          "type": "object",
+          "description": "Cliente",
+          "properties": {
+            "tipo": {
+              "type": "integer",
+              "example": 1,
+              "description": "Tipo da Pessoa",
+              "enum": [
+                {
+                  "1": "Física"
+                },
+                {
+                  "2": "Jurídica"
+                }
+              ]
+            },
+            "cpfCnpj": {
+              "type": "string",
+              "example": "069.654.985-99",
+              "description": "Cnpj ou Cpf da pessoa (com máscara)"
+            },
+            "nome": {
+              "type": "string",
+              "example": "João da Silva"
+            },
+            "nomeFantasia": {
+              "type": "string",
+              "example": "Nome Fantasia da Empresa",
+              "description": "Para quando for empresa"
+            },
+            "endereco": {
+              "type": "array",
+              "items": {
+                "properties": {
+                  "cidade": {
+                    "type": "string",
+                    "example": "Criciúma/SC",
+                    "description": "Nome da cidade/sigla do estado do cliente"
+                  },
+                  "cep": {
+                    "type": "integer",
+                    "example": "88800001"
+                  }
+                }
+              }
+            },
+            "contatos": {
+              "type": "array",
+              "items": {
+                "description": "Contatos da Pessoa. Se caso não houver nenhum contato retorna null",
+                "properties": {
+                  "tipo": {
+                    "type": "integer",
+                    "example": 2,
+                    "description": "Tipo de Contato",
+                    "enum": [
+                      {
+                        "1": "E-mail"
+                      },
+                      {
+                        "2": "Celular"
+                      },
+                      {
+                        "3": "Residêncial"
+                      },
+                      {
+                        "4": "Comercial"
+                      }
+                    ]
+                  },
+                  "tipoDescricao": {
+                    "type": "string",
+                    "example": "Celular",
+                    "description": "Descrição do Tipo"
+                  },
+                  "contato": {
+                    "type": "string",
+                    "description": "Telefone/E-mail de Contato",
+                    "example": "(47) 9999-9999"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "cupom": {
+          "type": "string",
+          "example": "PRIMEIRA-COMPRA",
+          "description": "Código do cupom usado no carrinho"
+        },
+        "atualizadoEm": {
+          "type": "string",
+          "format": "dateTime",
+          "description": "Data/Hora que o carrinho foi atualizado pela última vez"
+        },
+        "criadoEm": {
+          "type": "string",
+          "format": "dateTime",
+          "description": "Data/Hora que o carrinho foi criado"
+        },
+        "itensCarrinho": {
+          "type": "array",
+          "items": {
+            "properties": {
+              "sku": {
+                "type": "string",
+                "description": "SKU do produto"
+              },
+              "descricao": {
+                "type": "string",
+                "description": "Nome do produto"
+              },
+              "referencia": {
+                "type": "string",
+                "description": "Referência do produto"
+              },
+              "ean": {
+                "type": "string",
+                "description": "EAN do produto"
+              },
+              "quantidade": {
+                "type": "integer",
+                "example": "2"
+              }
+            }
+          }
+        }
+      }
+    },
+    "Pessoa": {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador interno do registro"
+        },
+        "tipo" : {
+          "type" : "integer",
+          "example" : 1,
+          "description" : "Tipo da Pessoa",
+          "enum": [{"1":"Física"},{"2":"Jurídica"}]
+        },
+        "cpfCnpj" : {
+          "type" : "string",
+          "example" : "069.654.985-99",
+          "description" : "Cnpj ou Cpf da pessoa (com máscara)"
+        },
+        "nome" : {
+          "type" : "string",
+          "example" : "João da Silva"
+        },
+        "nomeFantasia" : {
+          "type" : "string",
+          "example" : "Nome Fantasia da Empresa",
+          "description" : "Para quando for empresa"
+        },
+        "inscricaoEstadual" : {
+          "type" : "string",
+          "example" : "083347950",
+          "description" : "Para quando for empresa"
+        },
+        "contatos" : {
+          "type" : "array",
+          "items" : {
+            "$ref" : "#/definitions/PessoaContato"
+          }
+        }
+
+      }
+    },
+    "PessoaContato" : {
+      "description":"Contatos da Pessoa. Se caso não houver nenhum contato retorna null",
+      "properties" :
+      {
+        "tipo" : {
+          "type" : "integer",
+          "example" : 2,
+          "description" : "Tipo do Telefone",
+          "enum": [{"2":"Celular"},{"3":"Residêncial"},{"4":"Comercial"}]
+        },
+        "tipoDescricao" : {
+          "type" : "string",
+          "example" : "Celular",
+          "description" : "Descrição do Tipo"
+        },
+        "contato" : {
+          "type" : "string",
+          "description" : "Telefone de Contato",
+          "example" : "(47) 9999-9999"
+        }
+      }
+    },
+    "Endereco" : {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador interno do registro"
+        },
+        "endereco" : {
+          "type" : "string",
+          "example" : "Rua Alfredo Nunes",
+          "maxLength" : 250
+        },
+        "numero" : {
+          "type" : "string",
+          "maxLength" : 15,
+          "example" : "2301"
+        },
+        "bairro" : {
+          "type" : "string",
+          "example" : "Centro",
+          "maxLength" : 250
+        },
+        "cep" : {
+          "type" : "integer",
+          "example" : 89065000
+        },
+        "complemento" : {
+          "type" : "string",
+          "example" : "Casa",
+          "maxLength" : 250
+        },
+        "referencia" : {
+          "type" : "string",
+          "maxLength" : 250,
+          "example" : "Ao lado da Loja 1001 utilizadades"
+        },
+        "cidade" : {
+          "$ref" : "#/definitions/Cidade"
+        }
+      }
+    },
+    "Cidade" : {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador interno do registro"
+        },
+        "nome" : {
+          "type" : "string",
+          "maxLength" : 300
+        },
+        "codigoIbge" : {
+          "type" : "integer",
+          "description" : "Código do cadastro do IBGE"
+        },
+        "estado" : {
+          "type" : "string",
+          "maxLength" : 2,
+          "description" : "Sigla do estado da cidade",
+          "example" : "SC"
+        }
+      }
+    },
+    "Transportadora" : {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador interno do registro"
+        },
+        "cnpj" : {
+          "type" : "string",
+          "example" : "58.283.378/0001-20"
+        },
+        "nomeRazao" : {
+          "type" : "string",
+          "example" : "Transportadora Exemplo Ltda"
+        },
+        "nomeFantasia" : {
+          "type" : "string",
+          "example" : "Transportadora Exemplo Ltda"
+        },
+        "inscricao-estadual" : {
+          "type" : "string",
+          "maxLength" : 20
+        },
+        "endereco" : {
+          "$ref" : "#/definitions/Endereco"
+        }
+      }
+    },
+    "PedidoOrigem" : {
+      "properties" : {
+        "utmSource" : {
+          "type" : "string",
+          "description" : "Marketing parâmetro: utm_source"
+        },
+        "cupom" : {
+          "type": "array",
+          "description": "Cupons aplicados no pedido",
+          "items" : {
+            "$ref" : "#/definitions/Cupom"
+          }
+        }
+      }
+    },
+    "PedidoPagamento" : {
+      "properties" : {
+        "gatewayCodigo" : {
+          "type" : "string",
+          "description" : "Código do Gateway de Pagamento"
+        },
+        "gatewayNome" : {
+          "type" : "string",
+          "description" : "Nome do Gateway de Pagamento"
+        },
+        "idTransaction" : {
+          "type" : "string",
+          "description" : "Identificador da transação"
+        },
+        "valorPagamento" : {
+          "type" : "number",
+          "description" : "Valor do Pagamento"
+        },
+        "numeroParcelas" : {
+          "type" : "number",
+          "description" : "Quantidade de Parcelas"
+        },
+        "cartaoNsu" : {
+          "type" : "string",
+          "description" : "NSU transações cartão"
+        },
+        "cartaoAutorizacao" : {
+          "type" : "string",
+          "description" : "Número de Autorização transações cartão"
+        },
+        "cartaoBandeira" : {
+          "type" : "string",
+          "description" : "Bandeira do cartão"
+        },
+        "log": {
+          "type": "object",
+          "description": "Log de informações do processamento do pagamento. Estrutura de informações dinâmicas conforme cada gateway de processamentoe e tipo de pagamento."
+        }
+      }
+    },
+    "Loja" : {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador interno da Loja"
+        },
+        "nome" : {
+          "type" : "string",
+          "example" : "Nome da Loja"
+        }
+      }
+    },
+    "Marketplace" : {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "description" : "Identificador interno do Marketplace"
+        },
+        "nome" : {
+          "type" : "string",
+          "example" : "Nome do Marketplace"
+        }
+      }
+    },
+    "Transporte" : {
+      "description": "Informações primárias de transporte geradas no fechamento do pedido de venda.",
+      "properties" : {
+        "transportadora" : {
+          "$ref" : "#/definitions/TransportadoraPedido"
+        },
+        "transportadoraRedespacho" : {
+          "$ref" : "#/definitions/TransportadoraPedido"
+        },
+        "valorFreteTransportadora" : {
+          "type" : "number",
+          "description": "Valor de Frete estimado pela Transportadora"
+        },
+        "dataHoraLimite" : {
+          "type" : "string",
+          "format": "dateTime",
+          "example": "2023-06-24 10:25:05-03",
+          "description": "Data/Hora limite de entrega que foi informado para o cliente"
+        }
+      }
+    },
+    "PedidoNotaFiscalRastreio" : {
+      "description": "Informações de transporte/rastreio geradas após o faturamento do pedido.",
+      "properties" : {
+        "notaFiscal": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "description": "Identificador interno do registro"
+            },
+            "chave": {
+              "type": "string",
+              "description": "Chave da NF-e de Rastreio"
+            }
+          }
+        },
+        "transportadora" : {
+          "$ref" : "#/definitions/TransportadoraPedido"
+        },
+        "transportadoraRedespacho" : {
+          "$ref" : "#/definitions/TransportadoraPedido"
+        },
+        "valorFreteTransportadora" : {
+          "type" : "number",
+          "description": "Valor de Cobrança estimado pela Transportadora"
+        },
+        "valorFrete" : {
+          "type" : "number",
+          "description": "Valor Total de Frete"
+        },
+        "codigoRastreio" : {
+          "type" : "string",
+          "description": "Código de Rastreio"
+        },
+        "situacaoTransportadora" : {
+          "type" : "string",
+          "description": "Situação de Transporte na Transportadora"
+        },
+        "situacaoCodigo" : {
+          "type" : "integer",
+          "description": "Código da Situação Interna"
+        },
+        "situacaoDescricao" : {
+          "type" : "string",
+          "description": "Descrição da Situação Interna"
+        },
+        "dataHoraSituacao" : {
+          "type" : "string",
+          "format" : "dateTime",
+          "description": "Data/Hora da Atualização da Situação"
+        },
+        "historico" : {
+          "type" : "array",
+          "description": "Histórico do Rastreio",
+          "items" : {
+            "$ref" : "#/definitions/PedidoNotaFiscalRastreioLog"
+          }
+        }
+      }
+    },
+    "PedidoNotaFiscalRastreioLog" : {
+      "description": "Log de Rastreio",
+      "properties": {
+        "dataHoraSituacao" : {
+          "type" : "string",
+          "format" : "dateTime",
+          "description": "Data/Hora do Registro da Situação"
+        },
+        "dataHoraRastreio" : {
+          "type" : "string",
+          "format" : "dateTime",
+          "description": "Data/Hora da movimentação do rastreio na transportadora"
+        },
+        "situacaoTransportadora" : {
+          "type" : "string",
+          "description": "Situação da Transportadora"
+        },
+        "situacaoCodigo" : {
+          "type" : "integer",
+          "description": "Código da Situação Interna"
+        },
+        "situacaoDescricao" : {
+          "type" : "string",
+          "description": "Descrição da Situação Interna"
+        }
+      }
+    },
+    "TransportadoraPedido" : {
+      "properties" : {
+        "pessoa" : {
+          "$ref" : "#/definitions/Pessoa"
+        },
+        "endereco" : {
+          "$ref" : "#/definitions/Endereco"
+        }
+      }
+    },
+    "Carregamento" : {
+      "properties" : {
+        "codigo" : {
+          "type" : "string",
+          "description": "Código do Carregamento"
+        },
+        "dataHora" : {
+          "type" : "string",
+          "format" : "dateTime"
+        },
+        "situacaoCodigo" : {
+          "type" : "number",
+          "description": "Código da Situação"
+        },
+        "situacaoDescricao" : {
+          "type" : "string",
+          "description": "Descrição da Situação"
+        },
+        "codigoColeta" : {
+          "type" : "string",
+          "description": "Identificação da solicitação da coleta. Por exemplo código PLP do Correios.<br />Gerado na solicitação da coleta."
+        }
+      }
+    },
+    "ResponseOperationError" : {
+      "description": "Para quando ocorrer um erro na consulta",
+      "properties" : {
+        "success" : {
+          "type" : "boolean",
+          "description" : "false",
+          "example": false
+        },
+        "message" : {
+          "type" : "string",
+          "description" : "Mensagem de retorno",
+          "example" : "Credenciais inválidas"
+        },
+        "status": {
+          "type" : "string",
+          "description" : "ERRO/PROCESSADO - <i>@deprecated</i>"
+        }
+      }
+    },
+    "Cupom" : {
+      "properties" : {
+        "codigoCupom" : {
+          "type" : "string",
+          "example" : "Código do Cupom"
+        },
+        "idCupom": {
+          "type" : "integer",
+          "example" : "Identificador do registro do cupom"
+        }
+      }
+    },
+    "Deposito" : {
+      "properties" : {
+        "id" : {
+          "type" : "integer",
+          "example" : "Identificador (#) do depósito"
+        },
+        "nome" : {
+          "type" : "string",
+          "description" : "Nome do depósito"
+        }
+      }
+    },
+    "PrecoVenda" : {
+      "properties" : {
+        "tabela_preco_id" : {
+          "type" : "integer",
+          "description" : "Identificador da Tabela de Preço"
+        },
+        "loja_nome" : {
+          "type" : "string",
+          "description" : "Nome da Loja/Canal de Venda"
+        },
+        "loja_id" : {
+          "type" : "integer",
+          "description" : "Identificador da Loja/Canal de Venda"
+        },
+        "produto_id" : {
+          "type" : "integer",
+          "description" : "Identificador do Produto Derivação"
+        },
+        "produto_sku" : {
+          "type" : "string",
+          "description" : "SKU do Produto Derivação"
+        },
+        "produto_ean" : {
+          "type" : "string",
+          "description" : "Código EAN do Produto Derivação"
+        },
+        "produto_descricao" : {
+          "type" : "string",
+          "description" : "Descrição do Produto Derivação"
+        },
+        "preco_de" : {
+          "type" : "number",
+          "description" : "Preço de/anterior exibido no site/canal de venda."
+        },
+        "preco_venda" : {
+          "type" : "number",
+          "description" : "Preço de Venda do Produto"
+        },
+        "promocao" : {
+          "type" : "integer",
+          "description" : "Identificador de que se o preço de venda foi manipulado por a respectiva promoção"
+        }
+      }
+    },
+    "ObjetoPostagem" : {
+      "description": "Cada Objeto de Postagem representa um volume/embalagem ",
+      "required" : ["altura","largura","comprimento","peso"],
+      "properties": {
+        "altura": {
+          "type": "number",
+          "description": "Altura (cm)",
+          "example": 20.30
+        },
+        "largura": {
+          "type": "number",
+          "description": "Largura (cm)",
+          "example": 20.30
+        },
+        "comprimento": {
+          "type": "number",
+          "description": "Comprimento/Profundidade (cm)",
+          "example": 15.30
+        },
+        "peso": {
+          "type": "number",
+          "description": "Peso bruto total do objeto de postagem (kg)",
+          "example": 0.600
+        }
+      }
+    }
+  },
+  "schemes" : [ "http" ],
+  "host" : "api.panoramasistemas.com.br",
+  "basePath" : "/loja/v1"
+}

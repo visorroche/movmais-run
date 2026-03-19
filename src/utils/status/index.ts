@@ -135,4 +135,34 @@ export function mapAnymarketStatus(raw: string): OrderStatus {
   return mapped;
 }
 
+/** Panorama: situacaoCodigo (1-18) e situacaoNome. */
+export function mapPanoramaStatus(situacaoCodigo: string | number, situacaoNome?: string): OrderStatus {
+  const code = typeof situacaoCodigo === "number" ? situacaoCodigo : parseInt(String(situacaoCodigo).trim(), 10);
+  const mapping: Record<number, OrderStatus> = {
+    1: "aguardando pagamento",  // Aguardando Pagamento
+    2: "cancelado",             // Cancelado
+    3: "aprovado",              // Pagamento Confirmado
+    4: "coletando",             // Em Separação
+    5: "faturando",             // Nota Fiscal Emitida
+    6: "em transporte",         // Transporte
+    7: "entregue",              // Entregue
+    8: "em transporte",         // Problemas no Transporte
+    9: "faturando",             // Faturado Parcial
+    10: "aguardando transporte", // Etiqueta Transporte Gerada
+    11: "em analise",           // Pagamento em Análise
+    12: "cancelado",            // Cancelado Operadora
+    13: "cancelado",            // Nota Fiscal Cancelada
+    14: "devolvido",            // Devolução
+    15: "faturando",            // Liberado para Faturamento
+    16: "cancelado",            // Em Cancelamento
+    17: "bloqueado",            // Problema com Estoque
+    18: "em analise",           // Em Atendimento
+  };
+  const mapped = mapping[code];
+  if (!mapped) {
+    throw new Error(`Status Panorama sem mapeamento: situacaoCodigo=${situacaoCodigo} situacaoNome=${situacaoNome ?? ""}`);
+  }
+  return mapped;
+}
+
 
