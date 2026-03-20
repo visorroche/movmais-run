@@ -253,6 +253,18 @@ function startHttpServer() {
         },
       },
     },
+    panorama: {
+      orders: {
+        scriptRel: "commands/panorama/panoramaOrders.js",
+        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--start-date=${startDate}`);
+          if (endDate) argv.push(`--end-date=${endDate}`);
+          if (onlyInsert) argv.push(`--onlyInsert`);
+          return argv;
+        },
+      },
+    },
   };
 
   const server = http.createServer((req, res) => {
