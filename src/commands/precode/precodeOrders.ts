@@ -11,8 +11,8 @@ import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapPrecodeStatus } from "../../utils/status/index.js";
-import { AvancoLogisticsOperator } from "../../entities/Avanco/AvancoLogisticsOperator.js";
 import { AvancoStock } from "../../entities/Avanco/AvancoStock.js";
+import { findAvancoOperatorByCarrier } from "../../utils/avancoOperatorByCarrier.js";
 import { AvancoStockMov } from "../../entities/Avanco/AvancoStockMov.js";
 import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
@@ -511,8 +511,7 @@ async function main() {
         await itemRepo.save(item);
       }
 
-      // Avanco stock: se carrier = slug do operador, debitar; se pedido cancelado, reverter movimentações
-      const operatorRepo = AppDataSource.getRepository(AvancoLogisticsOperator);
+      // Avanco stock: se carrier = sinônimo do operador, debitar e normalizar carrier = company.name; se cancelado, reverter
       const stockRepo = AppDataSource.getRepository(AvancoStock);
       const movRepo = AppDataSource.getRepository(AvancoStockMov);
       const orderIdStr = String(order.id);
@@ -532,13 +531,10 @@ async function main() {
           await movRepo.remove(mov);
         }
       } else if (order.carrier && String(order.carrier).trim()) {
-        const carrierSlug = String(order.carrier).trim();
-        // Busca case-insensitive: Precode pode enviar "Fatelog" e o operador estar cadastrado como "fatelog"
-        const operator = await operatorRepo
-          .createQueryBuilder("op")
-          .where("LOWER(TRIM(op.slug)) = LOWER(:carrier)", { carrier: carrierSlug })
-          .getOne();
+        const operator = await findAvancoOperatorByCarrier(order.carrier);
         if (operator) {
+          order.carrier = operator.company?.name ?? order.carrier;
+          await orderRepo.save(order);
           const savedItems = await itemRepo.find({
             where: { order: { id: order.id } },
             relations: ["product"],
