@@ -33,6 +33,7 @@ import { City } from "../entities/City.js";
 import { CustomDashboards } from "../entities/CustomDashboards.js";
 import { Threads } from "../entities/Threads.js";
 import { ThreadMessages } from "../entities/ThreadMessages.js";
+import { AiAgentFeedback } from "../entities/AiAgentFeedback.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
 export const AppDataSource = new DataSource({
@@ -92,6 +93,7 @@ export const AppDataSource = new DataSource({
     CustomDashboards,
     Threads,
     ThreadMessages,
+    AiAgentFeedback,
   ],
   migrations: [],
   subscribers: [],
