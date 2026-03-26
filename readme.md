@@ -85,6 +85,27 @@ Opcional: `--onlyInsert` para pular pedidos que já existem (mesmo `order_code`)
 npm run script:panorama:orders -- --company=1 --start-date=2026-03-01 --end-date=2026-03-30 --onlyInsert
 ```
 
+### Revisão automática de feedbacks (IA dashboard)
+
+Processa feedbacks pendentes (`ai_agent_feedbacks.analyzed=false`), monta contexto da conversa até a mensagem alvo, chama o Codex CLI para aplicar melhorias em `api/` e `front/`, valida build, cria commit/PR (1 por feedback) e marca `analyzed=true` quando a PR é criada.
+
+```bash
+npm run script:feedback:review-ai
+```
+
+Parâmetros:
+
+- `--feedback-id=123` processa apenas um feedback.
+- `--limit=10` limita quantos feedbacks pendentes serão processados.
+- `--dry-run` executa revisão sem commit/push/PR e sem marcar `analyzed`.
+- `--codex-command="codex exec"` sobrescreve o comando usado para chamar o Codex CLI.
+- `--timeout-ms=1200000` timeout por execução do Codex (padrão: 20 min).
+
+Variáveis de ambiente opcionais:
+
+- `FEEDBACK_CODEX_COMMAND` comando padrão do Codex CLI (fallback para `codex exec`).
+- `FEEDBACK_CODEX_TIMEOUT_MS` timeout padrão em ms.
+
 ### Database B2B
 
 Executa 1 comando por entidade e aplica os tratamentos configurados no mapeamento (ex.: `mapear_valores`, `limpeza_regex`, `concatenar_campos`, `usar_um_ou_outro`, `mapear_json`).

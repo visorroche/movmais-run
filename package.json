@@ -30,6 +30,7 @@
     "script:allpost:backfill-freight-order-date-time": "npm run build && node dist/commands/allpost/backfillFreightOrderDateTime.js",
     "script:allpost:backfill-freight-quote-best-option": "npm run build && node dist/commands/allpost/backfillFreightQuoteBestOption.js",
     "script:resume:freight": "npm run build && node dist/commands/resume/freight.js",
+    "script:feedback:review-ai": "npm run build && node dist/commands/feedback/reviewAiFeedbacks.js",
     "script:sync-schema": "npm run build && node dist/commands/syncSchema.js",
     "schema:log": "npm run build && node dist/commands/schemaLog.js",
     "schema:resume-md": "npm run build && node dist/commands/schemaResumeMd.js",

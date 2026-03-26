@@ -8,9 +8,10 @@ import {
   JoinColumn,
 } from "typeorm";
 import { Company } from "./Company.js";
+import { User } from "./User.js";
 
 /**
- * Threads genéricas (reutilizável para custom_dashboard e outros fluxos de IA).
+ * Threads genéricas (reutilizável para custom_dashboard, insights e outros fluxos de IA).
  */
 @Entity({ name: "threads" })
 export class Threads {
@@ -24,13 +25,25 @@ export class Threads {
   @JoinColumn({ name: "company_id" })
   company?: Company;
 
-  /** Tipo da entidade vinculada (ex.: custom_dashboard). */
+  /** Usuário que iniciou a conversa (ex.: Insights). */
+  @Column({ type: "int", name: "user_id", nullable: true })
+  user_id!: number | null;
+
+  @ManyToOne(() => User, { onDelete: "SET NULL" })
+  @JoinColumn({ name: "user_id" })
+  user?: User | null;
+
+  /** Título da conversa. */
+  @Column({ type: "varchar", length: 180, nullable: true, name: "title" })
+  title!: string | null;
+
+  /** Tipo da entidade vinculada (ex.: custom_dashboard, insights). */
   @Column({ type: "varchar", length: 64, name: "type_entity" })
   type_entity!: string;
 
-  /** Id da entidade na tabela correspondente (ex.: id em custom_dashboards). */
-  @Column({ type: "int", name: "entity_id" })
-  entity_id!: number;
+  /** Id da entidade; null quando não há entidade (ex.: insights). */
+  @Column({ type: "int", name: "entity_id", nullable: true })
+  entity_id!: number | null;
 
   /** Objeto atual (ex.: layout do dashboard na última resposta). */
   @Column({ type: "jsonb", nullable: true, name: "current_object" })
