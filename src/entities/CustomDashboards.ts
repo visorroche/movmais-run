@@ -43,6 +43,10 @@ export class CustomDashboards {
   @Column({ type: "varchar", length: 10, default: "only" })
   type_access!: string;
 
+  /** Se false, não entra na listagem do menu lateral; acesso só por URL direta. */
+  @Column({ type: "boolean", default: true })
+  menu!: boolean;
+
   @Column({ type: "int", default: 1 })
   version!: number;
 

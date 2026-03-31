@@ -108,6 +108,15 @@ interface ColumnInfo {
   type: string;
   /** Valores possíveis quando a coluna é tipada com um enum (string enum). */
   enumValues?: string[];
+  /** Referência opcional quando a coluna é chave estrangeira. */
+  foreignKeyRef?: string;
+}
+
+interface ForeignKeyInfo {
+  name: string;
+  type: string;
+  refTable: string;
+  refColumn: string;
 }
 
 /** Extrai os valores (RHS) de um string enum no conteúdo do arquivo. */
@@ -245,6 +254,108 @@ function resolveEnumValuesForType(filePath: string, content: string, typeName: s
   return extractConstArrayValues(importedContent, importedConstName);
 }
 
+function extractPrimaryIdType(entityFilePath: string): string {
+  try {
+    const content = fs.readFileSync(entityFilePath, "utf-8");
+    const lines = content.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (!/@PrimaryGeneratedColumn\s*\(/.test(line)) continue;
+      const typeOpt = /type:\s*["'](\w+)["']/.exec(line);
+      if (typeOpt?.[1]) return typeOpt[1];
+      // UUID no primeiro arg: @PrimaryGeneratedColumn("uuid")
+      const short = /@PrimaryGeneratedColumn\s*\(\s*["'](\w+)["']/.exec(line);
+      if (short?.[1]) return short[1];
+      return "int";
+    }
+  } catch {
+    // ignore
+  }
+  return "int";
+}
+
+function extractForeignKeys(filePath: string, content: string): ForeignKeyInfo[] {
+  const lines = content.split(/\r?\n/);
+  const fks: ForeignKeyInfo[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (!line.includes("@ManyToOne")) continue;
+
+    // bloco do @ManyToOne pode ser multiline
+    let manyToOneBlock = line;
+    let j = i;
+    while (
+      manyToOneBlock.includes("@ManyToOne") &&
+      (manyToOneBlock.indexOf(")") < 0 || manyToOneBlock.split("(").length - 1 !== manyToOneBlock.split(")").length - 1)
+    ) {
+      j++;
+      if (j >= lines.length) break;
+      manyToOneBlock += "\n" + (lines[j] ?? "");
+    }
+
+    // procura @JoinColumn logo abaixo
+    let k = j + 1;
+    while (k < lines.length && !(lines[k] ?? "").includes("@JoinColumn")) k++;
+    if (k >= lines.length) continue;
+    let joinBlock = lines[k] ?? "";
+    let k2 = k;
+    while (joinBlock.includes("@JoinColumn") && (joinBlock.indexOf(")") < 0 || joinBlock.split("(").length - 1 !== joinBlock.split(")").length - 1)) {
+      k2++;
+      if (k2 >= lines.length) break;
+      joinBlock += "\n" + (lines[k2] ?? "");
+    }
+    const nameMatch = /name:\s*["']([^"']+)["']/.exec(joinBlock);
+    if (!nameMatch?.[1]) continue;
+    const fkName = nameMatch[1];
+
+    // tenta inferir classe alvo da relação: @ManyToOne(() => Product, ...)
+    const targetMatch = /@ManyToOne\s*\(\s*\(\)\s*=>\s*(\w+)/.exec(manyToOneBlock);
+    const propLineAfterJoin = lines[k2 + 1] ?? "";
+    const propTypeName = getPropertyTypeName(propLineAfterJoin);
+    const targetType = targetMatch?.[1] ?? propTypeName ?? null;
+
+    let refTable = "?";
+    let refType = "int";
+    if (targetType) {
+      const ownClassName = extractClassName(content);
+      if (ownClassName && ownClassName === targetType) {
+        refTable = extractTableName(content) ?? camelToSnake(targetType);
+        refType = extractPrimaryIdType(filePath);
+      } else {
+        const importSource = findImportSourceForSymbol(content, targetType);
+        if (importSource) {
+          const importedPath = resolveImportedModulePath(filePath, importSource);
+          if (importedPath) {
+            try {
+              const importedContent = fs.readFileSync(importedPath, "utf-8");
+              refTable = extractTableName(importedContent) ?? camelToSnake(targetType);
+              refType = extractPrimaryIdType(importedPath);
+            } catch {
+              // ignore, keep defaults
+            }
+          }
+        }
+      }
+      // fallback final: usa padrão snake_case da classe para evitar "?"
+      if (refTable === "?") {
+        refTable = camelToSnake(targetType);
+      }
+      if (refType === "?") {
+        refType = "int";
+      }
+    }
+
+    fks.push({
+      name: fkName,
+      type: refType,
+      refTable,
+      refColumn: "id",
+    });
+    i = Math.max(i, k2);
+  }
+  return fks;
+}
+
 /** Verifica se há comentário //NOMAP em alguma linha acima do índice (até o próximo decorator ou propriedade). */
 function hasNomapAbove(lines: string[], index: number): boolean {
   for (let k = index - 1; k >= 0; k--) {
@@ -256,7 +367,7 @@ function hasNomapAbove(lines: string[], index: number): boolean {
 }
 
 function extractColumns(filePath: string, content: string): ColumnInfo[] {
-  const columns: ColumnInfo[] = [];
+  let columns: ColumnInfo[] = [];
   const lines = content.split(/\r?\n/);
 
   for (let i = 0; i < lines.length; i++) {
@@ -311,7 +422,24 @@ function extractColumns(filePath: string, content: string): ColumnInfo[] {
       continue;
     }
 
-    // @JoinColumn: não listamos (evita duplicata com a coluna escalar; a IA usa só o nome da coluna).
+    // @JoinColumn é tratado depois para inferir colunas de FK quando não há @Column escalar.
+  }
+
+  // Inclui FKs inferidas de @ManyToOne + @JoinColumn quando não há @Column escalar explícita.
+  const fks = extractForeignKeys(filePath, content);
+  for (const fk of fks) {
+    if (columns.some((c) => c.name === fk.name)) {
+      // Se já existe coluna escalar, apenas anota referência.
+      columns = columns.map((c) =>
+        c.name === fk.name ? { ...c, foreignKeyRef: `${fk.refTable}.${fk.refColumn}` } : c,
+      );
+      continue;
+    }
+    columns.push({
+      name: fk.name,
+      type: fk.type,
+      foreignKeyRef: `${fk.refTable}.${fk.refColumn}`,
+    });
   }
 
   return columns;
@@ -386,11 +514,12 @@ function main(): void {
       md.push(description);
     }
     md.push("");
-    md.push("| Coluna | Tipo |");
-    md.push("|--------|------|");
+    md.push("| Coluna | Tipo | Referência |");
+    md.push("|--------|------|------------|");
     for (const col of columns) {
       const typeCell = col.enumValues?.length ? col.type + " (enum)" : col.type;
-      md.push("| " + col.name + " | " + typeCell + " |");
+      const refCell = col.foreignKeyRef ? "`" + col.foreignKeyRef + "`" : "-";
+      md.push("| " + col.name + " | " + typeCell + " | " + refCell + " |");
     }
     const enumCols = columns.filter((c) => c.enumValues && c.enumValues.length > 0);
     if (enumCols.length > 0) {

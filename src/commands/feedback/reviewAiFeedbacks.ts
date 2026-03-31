@@ -200,10 +200,10 @@ Você está revisando um feedback real de cliente sobre o assistente de Insights
 OBJETIVO:
 - Melhorar o comportamento do agente para reduzir recorrência desse tipo de erro.
 - Priorizar alterações em prompts:
-  1) api/src/prompt/insightsPlanner.md
-  2) api/src/prompt/insightsQuerySql.md
-  3) api/src/prompt/insightsFinal.md
-  4) api/src/prompt/insightsTitle.md
+  1) api/src/prompt/insights/insightsPlanner.md
+  2) api/src/prompt/insights/insightsQuerySql.md
+  3) api/src/prompt/insights/insightsFinal.md
+  4) api/src/prompt/insights/insightsTitle.md
 - Só em último caso, alterar código:
   - api/src/dashboard/insights-chat.service.ts
   - api/src/dashboard/insights-executor.ts
@@ -241,10 +241,10 @@ Você está revisando um feedback real de cliente sobre o agente de IA que const
 OBJETIVO:
 - Melhorar o comportamento do agente para reduzir recorrência desse tipo de erro.
 - Priorizar alterações em prompts:
-  1) api/src/prompt/customDashboard.md
-  2) api/src/prompt/customDashboardPlanner.md
-  3) api/src/prompt/customDashboardFixQueries.md
-  4) api/src/prompt/customDashboardFixLayout.md
+  1) api/src/prompt/customDashboard/customDashboard.md
+  2) api/src/prompt/customDashboard/customDashboardPlanner.md
+  3) api/src/prompt/customDashboard/customDashboardFixQueries.md
+  4) api/src/prompt/customDashboard/customDashboardFixLayout.md
 - Só em último caso, alterar código:
   - api/src/dashboard/dashboard.service.ts
   - api/src/dashboard/layout-schema.ts
