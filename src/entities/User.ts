@@ -20,8 +20,11 @@ export class User {
   @Column({ type: "varchar", unique: true })
   email?: string;
 
-  @Column({ type: 'varchar', unique: true, nullable: true })
+  @Column({ type: "varchar", nullable: true })
   phone?: string | null;
+
+  @Column({ type: "boolean", default: false, name: "phone_verified" })
+  phoneVerified!: boolean;
 
   @Column({ type: "varchar" })
   password?: string;
