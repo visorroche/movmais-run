@@ -53,4 +53,8 @@ export class ThreadMessages {
   /** Completion tokens gastos nesta troca de mensagem (preenchido na linha da resposta do assistente). */
   @Column({ type: "int", nullable: true, name: "completion_tokens" })
   completion_tokens!: number | null;
+
+  /** Id da mensagem no provedor externo (ex.: Z-API `messageId`); único quando preenchido, para deduplicar webhooks. */
+  @Column({ type: "varchar", length: 191, nullable: true, name: "external_message_id", unique: true })
+  external_message_id!: string | null;
 }
