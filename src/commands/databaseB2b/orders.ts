@@ -893,16 +893,51 @@ async function main() {
       const startDateStr = String(args.startDate);
       const endDateStr = String(args.endDate);
       const endOfDayStr = endDateStr + " 23:59:59.999";
-      const orderIdsInRange = await orderRepoNow
+      const incomingOrderCodes = Array.from(
+        new Set(
+          entries
+            .map(({ orderRows }) => {
+              const first = orderRows[0];
+              if (!first) return null;
+              return orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, first));
+            })
+            .filter((v): v is string => Boolean(v)),
+        ),
+      );
+
+      const idsSet = new Set<number>();
+      // 1) Deleta por faixa de data (comportamento original do --force)
+      const idsByDate = await orderRepoNow
         .createQueryBuilder("o")
         .select("o.id")
         .where("o.company_id = :companyId", { companyId: company.id })
         .andWhere("o.order_date >= :start", { start: startDateStr })
         .andWhere("o.order_date <= :end", { end: endOfDayStr })
         .getMany();
-      const ids = orderIdsInRange.map((o) => (o as any).id).filter((id: number) => Number.isFinite(id));
+      for (const o of idsByDate) {
+        const id = Number((o as any).id);
+        if (Number.isFinite(id)) idsSet.add(id);
+      }
+
+      // 2) Também deleta por order_code de entrada para evitar conflito de unique
+      // quando existir registro antigo do mesmo código fora do range (ou com order_date nulo).
+      for (const codes of chunk(incomingOrderCodes, 500)) {
+        if (!codes.length) continue;
+        const idsByCode = await orderRepoNow
+          .createQueryBuilder("o")
+          .select("o.id")
+          .where("o.company_id = :companyId", { companyId: company.id })
+          .andWhere("o.order_code IN (:...codes)", { codes })
+          .getMany();
+        for (const o of idsByCode) {
+          const id = Number((o as any).id);
+          if (Number.isFinite(id)) idsSet.add(id);
+        }
+      }
+
+      const ids = Array.from(idsSet);
       console.log(
-        `[databaseB2b:orders] bulk delete pedidos no período ${startDateStr}..${endDateStr}: ${ids.length} ids a remover`,
+        `[databaseB2b:orders] bulk delete --force: período ${startDateStr}..${endDateStr} + ${incomingOrderCodes.length} order_codes de entrada => ${ids.length} ids a remover`,
       );
       if (ids.length > 0) {
         await itemRepoNow.createQueryBuilder().delete().where("order_id IN (:...ids)", { ids }).execute();
