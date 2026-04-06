@@ -18,6 +18,7 @@ import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
 import { toGender } from "../../utils/gender.js";
 import { toActiveBoolean } from "../../utils/active-status.js";
+import { parseReplicadeJsonBody } from "../../utils/replicadeHttpJson.js";
 
 type Args = {
   company: number;
@@ -105,11 +106,12 @@ async function httpGetJson(url: string, token: string): Promise<unknown> {
     },
   });
 
+  const rawText = await resp.text().catch(() => "");
   if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`HTTP ${resp.status} ao chamar ${url}. Body: ${text.slice(0, 500)}`);
+    throw new Error(`HTTP ${resp.status} ao chamar ${url}. Body: ${rawText.slice(0, 500)}`);
   }
-  return await resp.json();
+
+  return parseReplicadeJsonBody(rawText, url, "precode:orders");
 }
 
 function pickString(obj: Record<string, unknown>, key: string): string | null {

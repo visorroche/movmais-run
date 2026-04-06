@@ -7,13 +7,18 @@ import { Plataform } from "../../entities/Plataform.js";
 import { CompanyPlataform } from "../../entities/CompanyPlataform.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
+import { parseReplicadeJsonBody } from "../../utils/replicadeHttpJson.js";
 
-type Args = { company: number };
+type Args = { company: number; noProgress?: boolean };
 
 function parseArgs(argv: string[]): Args {
   const raw = new Map<string, string>();
   for (const a of argv) {
     if (!a.startsWith("--")) continue;
+    if (a === "--no-progress" || a === "--no-progress=true") {
+      raw.set("noProgress", "true");
+      continue;
+    }
     const parts = a.slice(2).split("=");
     const k = parts[0];
     if (!k) continue;
@@ -24,7 +29,46 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isInteger(company) || company <= 0) {
     throw new Error('Parâmetro obrigatório inválido: --company=ID (inteiro positivo).');
   }
-  return { company };
+  const noProgress = raw.get("noProgress") === "true";
+  return { company, ...(noProgress ? { noProgress: true } : {}) };
+}
+
+const PROGRESS_BAR_WIDTH = 24;
+
+function ratio01(n: number, d: number): number {
+  if (d <= 0) return 1;
+  return Math.max(0, Math.min(1, n / d));
+}
+
+function formatAsciiBar(ratio: number): string {
+  const r = Math.max(0, Math.min(1, ratio));
+  const filled = Math.round(r * PROGRESS_BAR_WIDTH);
+  return `[${"#".repeat(filled)}${"-".repeat(PROGRESS_BAR_WIDTH - filled)}]`;
+}
+
+type ProgressCtx = {
+  kind: string;
+  page: number;
+  indexInPage: number;
+  pageSize: number;
+  upserted: number;
+  processed: number;
+  detailsFetched: number;
+  detailsMissing: number;
+  sku: string;
+  step: string;
+};
+
+function formatProgressLine(c: ProgressCtx): string {
+  const pct = (ratio01(c.indexInPage, c.pageSize) * 100).toFixed(1);
+  const bar = formatAsciiBar(ratio01(c.indexInPage, c.pageSize));
+  return `[precode:products] ${c.kind} página ${c.page} ${bar} ${pct}% ${c.indexInPage}/${c.pageSize} | upsert=${c.upserted} proc=${c.processed} det=${c.detailsFetched}/${c.detailsMissing} | sku=${c.sku} | ${c.step}`;
+}
+
+function writeProgressLine(c: ProgressCtx, minClearWidth: number): void {
+  const line = formatProgressLine(c);
+  const pad = line.length < minClearWidth ? " ".repeat(minClearWidth - line.length) : "";
+  process.stdout.write(`\r${line}${pad}`);
 }
 
 function ensureArray(value: unknown): unknown[] {
@@ -83,11 +127,12 @@ async function httpGetJson(url: string, token: string): Promise<unknown> {
     },
   });
 
+  const rawText = await resp.text().catch(() => "");
   if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`HTTP ${resp.status} ao chamar ${url}. Body: ${text.slice(0, 500)}`);
+    throw new Error(`HTTP ${resp.status} ao chamar ${url}. Body: ${rawText.slice(0, 500)}`);
   }
-  return await resp.json();
+
+  return parseReplicadeJsonBody(rawText, url, "precode:products");
 }
 
 async function main() {
@@ -176,11 +221,10 @@ async function main() {
       }
     }
 
-    // ListaProduto é paginado (page=1..N). Vamos buscar até não retornar mais produtos.
+    // ListaProduto: paginação por path — /ativo/N e /inativo/N até { "produto": [] }.
     const baseListUrl = "https://www.replicade.com.br/api/v1/produtoLoja/ListaProduto";
-    let page = 1;
     let pagesFetched = 0;
-    const MAX_PAGES = 10_000; // safety cap para evitar loop infinito caso a API ignore paginação
+    const MAX_PAGES = 10_000;
     const seenSkus = new Set<string>();
 
     let processed = 0;
@@ -188,126 +232,161 @@ async function main() {
     let detailsFetched = 0;
     let detailsMissing = 0;
 
-    while (true) {
-      if (page > MAX_PAGES) {
-        console.warn(`[precode:products] aborting pagination: max_pages_reached=${MAX_PAGES}`);
-        break;
-      }
+    const listKinds = ["ativo", "inativo"] as const;
+    const noProgress = Boolean(args.noProgress);
 
-      const listUrl = `${baseListUrl}?page=${page}`;
-      const listJson = await httpGetJson(listUrl, tokenStr);
-      const listObj = asRecord(listJson) ?? {};
-      const listArr = ensureArray(listObj.produto);
-      pagesFetched += 1;
-
-      let newSkusInPage = 0;
-      console.log(`[precode:products] fetching page=${page} items=${listArr.length}`);
-      if (listArr.length === 0) break;
-
-      for (const row of listArr) {
-        const obj = asRecord(row);
-        if (!obj) continue;
-        const skuNum = pickNumber(obj, "sku");
-        if (!skuNum) continue;
-        const sku = String(skuNum);
-        if (seenSkus.has(sku)) continue;
-        seenSkus.add(sku);
-        newSkusInPage += 1;
-
-        const api = await fetchProductBySku(skuNum);
-        if (api?.produto) detailsFetched += 1;
-        else detailsMissing += 1;
-
-        const produto = api?.produto ?? null;
-        const listTitle = pickString(obj, "titulo");
-        const listCategory = pickString(obj, "categoria");
-        const listReference = pickString(obj, "IdReferencia");
-
-        let entity =
-          (await productRepo.findOne({ where: { company: { id: companyRef.id }, sku } })) ??
-          productRepo.create({ company: companyRef, sku });
-
-        entity.company = companyRef;
-        entity.sku = sku;
-
-        // Precode não fornece esses campos aqui (mantemos null)
-        entity.ecommerceId = entity.ecommerceId ?? null;
-        entity.ean = entity.ean ?? null;
-        entity.slug = entity.slug ?? null;
-        entity.brandId = entity.brandId ?? null;
-        entity.externalCategoryId = entity.externalCategoryId ?? null;
-        entity.url = entity.url ?? null;
-
-        // Preferimos o detalhamento ProdutoSku; fallback para ListaProduto
-        entity.name =
-          (produto ? pickString(produto, "tituloCurto") ?? pickString(produto, "titulo") : null) ??
-          listTitle ??
-          entity.name ??
-          null;
-        entity.storeReference =
-          (produto ? pickString(produto, "codigoReferenciaFabrica") : null) ??
-          listReference ??
-          entity.storeReference ??
-          null;
-
-        // Foto principal vem em produto.atributos[].fotoprincipal (por variação/SKU)
-        // Não travamos por manualAttributesLocked: foto pode/deve acompanhar integrações.
-        entity.photo = pickPrecodeMainPhoto(produto, skuNum) ?? entity.photo ?? null;
-
-        if (!entity.manualAttributesLocked) {
-        entity.brand = (produto ? pickString(produto, "marca") : null) ?? entity.brand ?? null;
-        entity.model = (produto ? pickString(produto, "modelo") : null) ?? entity.model ?? null;
+    for (const kind of listKinds) {
+      let page = 1;
+      while (true) {
+        if (page > MAX_PAGES) {
+          console.warn(`[precode:products] ${kind}: aborting pagination: max_pages_reached=${MAX_PAGES}`);
+          break;
         }
 
-        entity.weight =
-          toNumericString(produto ? (pickNumber(produto, "peso") ?? pickString(produto, "peso")) : null) ??
-          entity.weight ??
-          null;
-        entity.width =
-          toNumericString(produto ? (pickNumber(produto, "largura_cm") ?? pickString(produto, "largura_cm")) : null) ??
-          entity.width ??
-          null;
-        entity.height =
-          toNumericString(produto ? (pickNumber(produto, "altura_cm") ?? pickString(produto, "altura_cm")) : null) ??
-          entity.height ??
-          null;
-        entity.lengthCm =
-          toNumericString(
-            produto ? (pickNumber(produto, "profundidade_cm") ?? pickString(produto, "profundidade_cm")) : null,
-          ) ??
-          entity.lengthCm ??
-          null;
+        const listUrl = `${baseListUrl}/${kind}/${page}`;
+        const listJson = await httpGetJson(listUrl, tokenStr);
+        const listObj = asRecord(listJson) ?? {};
+        const listArr = ensureArray(listObj.produto);
+        pagesFetched += 1;
 
-        entity.ncm =
-          (produto ? (pickString(produto, "NCM") ?? pickString(produto, "ncm")) : null) ?? entity.ncm ?? null;
-        if (!entity.manualAttributesLocked) {
-        entity.category =
-          (produto ? pickString(produto, "categoria") : null) ?? listCategory ?? entity.category ?? null;
-        entity.subcategory = (produto ? pickString(produto, "subcategoria") : null) ?? entity.subcategory ?? null;
-        entity.finalCategory = (produto ? pickString(produto, "categoriaFinal") : null) ?? entity.finalCategory ?? null;
-        }
+        console.log(`[precode:products] ${kind} página ${page} — ${listArr.length} itens (progresso na linha seguinte)`);
+        if (listArr.length === 0) break;
 
-        // payload cru: guardamos lista + detalhes (quando houver)
-        entity.raw = { list: obj, detail: api?.raw ?? null };
-
-        // eslint-disable-next-line no-await-in-loop
-        entity = await productRepo.save(entity);
-        upserted += 1;
-        processed += 1;
-
-        if (processed % 100 === 0) {
-          console.log(
-            `[precode:products] processed=${processed} upserted=${upserted} details_fetched=${detailsFetched} details_missing=${detailsMissing}`,
+        const progressMinWidth = 145;
+        const writeBar = (indexInPage: number, sku: string, step: string): void => {
+          if (noProgress) return;
+          writeProgressLine(
+            {
+              kind,
+              page,
+              indexInPage,
+              pageSize: listArr.length,
+              upserted,
+              processed,
+              detailsFetched,
+              detailsMissing,
+              sku,
+              step,
+            },
+            progressMinWidth,
           );
+        };
+
+        for (let rowIdx = 0; rowIdx < listArr.length; rowIdx++) {
+          const row = listArr[rowIdx];
+          const pos = rowIdx + 1;
+          const obj = asRecord(row);
+          let skuForBar = "—";
+          if (obj) {
+            const sn = pickNumber(obj, "sku");
+            if (sn != null) skuForBar = String(sn);
+          }
+          writeBar(pos, skuForBar, "lendo linha");
+
+          if (!obj) continue;
+          const skuNum = pickNumber(obj, "sku");
+          if (!skuNum) continue;
+          const sku = String(skuNum);
+          if (seenSkus.has(sku)) {
+            writeBar(pos, sku, "duplicado (já processado)");
+            continue;
+          }
+          seenSkus.add(sku);
+
+          writeBar(pos, sku, "GET ProdutoSku…");
+          const api = await fetchProductBySku(skuNum);
+          if (api?.produto) detailsFetched += 1;
+          else detailsMissing += 1;
+
+          const produto = api?.produto ?? null;
+          const listTitle = pickString(obj, "titulo");
+          const listCategory = pickString(obj, "categoria");
+          const listReference = pickString(obj, "IdReferencia");
+
+          let entity =
+            (await productRepo.findOne({ where: { company: { id: companyRef.id }, sku } })) ??
+            productRepo.create({ company: companyRef, sku });
+
+          entity.company = companyRef;
+          entity.sku = sku;
+
+          // Precode não fornece esses campos aqui (mantemos null)
+          entity.ecommerceId = entity.ecommerceId ?? null;
+          entity.ean = entity.ean ?? null;
+          entity.slug = entity.slug ?? null;
+          entity.brandId = entity.brandId ?? null;
+          entity.externalCategoryId = entity.externalCategoryId ?? null;
+          entity.url = entity.url ?? null;
+
+          // Preferimos o detalhamento ProdutoSku; fallback para ListaProduto
+          entity.name =
+            (produto ? pickString(produto, "tituloCurto") ?? pickString(produto, "titulo") : null) ??
+            listTitle ??
+            entity.name ??
+            null;
+          entity.storeReference =
+            (produto ? pickString(produto, "codigoReferenciaFabrica") : null) ??
+            listReference ??
+            entity.storeReference ??
+            null;
+
+          // Foto principal vem em produto.atributos[].fotoprincipal (por variação/SKU)
+          // Não travamos por manualAttributesLocked: foto pode/deve acompanhar integrações.
+          entity.photo = pickPrecodeMainPhoto(produto, skuNum) ?? entity.photo ?? null;
+
+          if (!entity.manualAttributesLocked) {
+            entity.brand = (produto ? pickString(produto, "marca") : null) ?? entity.brand ?? null;
+            entity.model = (produto ? pickString(produto, "modelo") : null) ?? entity.model ?? null;
+          }
+
+          entity.weight =
+            toNumericString(produto ? (pickNumber(produto, "peso") ?? pickString(produto, "peso")) : null) ??
+            entity.weight ??
+            null;
+          entity.width =
+            toNumericString(produto ? (pickNumber(produto, "largura_cm") ?? pickString(produto, "largura_cm")) : null) ??
+            entity.width ??
+            null;
+          entity.height =
+            toNumericString(produto ? (pickNumber(produto, "altura_cm") ?? pickString(produto, "altura_cm")) : null) ??
+            entity.height ??
+            null;
+          entity.lengthCm =
+            toNumericString(
+              produto ? (pickNumber(produto, "profundidade_cm") ?? pickString(produto, "profundidade_cm")) : null,
+            ) ??
+            entity.lengthCm ??
+            null;
+
+          entity.ncm =
+            (produto ? (pickString(produto, "NCM") ?? pickString(produto, "ncm")) : null) ?? entity.ncm ?? null;
+          if (!entity.manualAttributesLocked) {
+            entity.category =
+              (produto ? pickString(produto, "categoria") : null) ?? listCategory ?? entity.category ?? null;
+            entity.subcategory = (produto ? pickString(produto, "subcategoria") : null) ?? entity.subcategory ?? null;
+            entity.finalCategory =
+              (produto ? pickString(produto, "categoriaFinal") : null) ?? entity.finalCategory ?? null;
+          }
+
+          // payload cru: guardamos lista + detalhes (quando houver)
+          entity.raw = { list: obj, detail: api?.raw ?? null };
+
+          writeBar(pos, sku, "salvando no banco…");
+          // eslint-disable-next-line no-await-in-loop
+          entity = await productRepo.save(entity);
+          upserted += 1;
+          processed += 1;
+          writeBar(pos, sku, "ok");
+
+          if (noProgress && processed % 100 === 0) {
+            console.log(
+              `[precode:products] processed=${processed} upserted=${upserted} details_fetched=${detailsFetched} details_missing=${detailsMissing}`,
+            );
+          }
         }
+        if (!noProgress) process.stdout.write("\n");
+        page += 1;
       }
-      if (newSkusInPage === 0) {
-        console.warn(
-          `[precode:products] stopping pagination: page=${page} returned items=${listArr.length} but new_skus_in_page=0 (API may be repeating / ignoring page param)`,
-        );
-        break;
-      }
-      page += 1;
     }
 
     console.log(
