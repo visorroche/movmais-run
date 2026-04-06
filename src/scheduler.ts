@@ -19,6 +19,7 @@ type JobName =
   | "anymarket:orders"
   | "precode:orders"
   | "tray:orders"
+  | "panorama:orders"
   | "databaseB2b:representatives"
   | "databaseB2b:customersGroups"
   | "databaseB2b:customers"
@@ -679,6 +680,16 @@ async function main() {
         `--end-date=${end}`,
       ]);
     });
+  const tickPanoramaOrders = () =>
+    runJob("panorama:orders", async () => {
+      const end = formatYmdUtc(utcMidnight(new Date()));
+      const start = formatYmdUtc(addDaysUtc(utcMidnight(new Date()), -1));
+      await runForCompanies("panorama", "commands/panorama/panoramaOrders.js", (companyId) => [
+        `--company=${companyId}`,
+        `--start-date=${start}`,
+        `--end-date=${end}`,
+      ]);
+    });
 
   const tickResumeFreight = () =>
     runJob("resume:freight", async () => {
@@ -701,7 +712,7 @@ async function main() {
 
   console.log("[scheduler] iniciado.");
   console.log(
-    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min, products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
+    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min (precode/tray/anymarket/panorama), products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
   );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
@@ -713,8 +724,9 @@ async function main() {
   setTimeout(() => void tickTrayProducts(), 10_000);
   setTimeout(() => void tickAnymarketProducts(), 12_000);
   setTimeout(() => void tickAnymarketOrders(), 14_000);
-  setTimeout(() => void tickDatabaseB2bSync(), 16_000);
-  setTimeout(() => void tickResumeFreight(), 28_000);
+  setTimeout(() => void tickPanoramaOrders(), 16_000);
+  setTimeout(() => void tickDatabaseB2bSync(), 18_000);
+  setTimeout(() => void tickResumeFreight(), 30_000);
 
   const timers: NodeJS.Timeout[] = [];
   timers.push(setInterval(() => void tickAllpost(), EVERY_30_MIN));
@@ -722,6 +734,7 @@ async function main() {
   timers.push(setInterval(() => void tickPrecodeOrders(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickTrayOrders(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickAnymarketOrders(), EVERY_30_MIN));
+  timers.push(setInterval(() => void tickPanoramaOrders(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickPrecodeProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickTrayProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickAnymarketProducts(), EVERY_3_HOURS));
