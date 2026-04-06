@@ -25,6 +25,7 @@ type Args = {
   startDate: string;
   endDate: string;
   onlyInsert?: boolean;
+  noProgress?: boolean;
 };
 
 function ymdToDate(value: string | null): Date | null {
@@ -64,6 +65,10 @@ function parseArgs(argv: string[]): Args {
       raw.set("onlyInsert", "true");
       continue;
     }
+    if (a === "--no-progress" || a === "--no-progress=true") {
+      raw.set("noProgress", "true");
+      continue;
+    }
     const parts = a.slice(2).split("=");
     const k = parts[0];
     if (!k) continue;
@@ -94,7 +99,39 @@ function parseArgs(argv: string[]): Args {
     throw new Error('Parâmetro inválido: --end-date=YYYY-MM-DD.');
   }
 
-  return { company, startDate, endDate, ...(onlyInsert ? { onlyInsert: true } : {}) };
+  const noProgress = raw.get("noProgress") === "true";
+  return {
+    company,
+    startDate,
+    endDate,
+    ...(onlyInsert ? { onlyInsert: true } : {}),
+    ...(noProgress ? { noProgress: true } : {}),
+  };
+}
+
+const PREC_ORD_BAR_W = 22;
+const PREC_ORD_LINE_MIN = 158;
+
+function writePrecodeOrdersProgressLine(
+  noProgress: boolean,
+  p: {
+    pos: number;
+    total: number;
+    completed: number;
+    np: string;
+    codigo: string;
+    step: string;
+  },
+): void {
+  if (noProgress) return;
+  const ratio = p.total > 0 ? p.pos / p.total : 1;
+  const r = Math.max(0, Math.min(1, ratio));
+  const filled = Math.round(r * PREC_ORD_BAR_W);
+  const bar = `[${"#".repeat(filled)}${"-".repeat(PREC_ORD_BAR_W - filled)}]`;
+  const pct = (r * 100).toFixed(1);
+  const line = `[precode:orders] ${bar} ${pct}% ${p.pos}/${p.total} | ok=${p.completed} | np=${p.np} cod=${p.codigo} | ${p.step}`;
+  const pad = line.length < PREC_ORD_LINE_MIN ? " ".repeat(PREC_ORD_LINE_MIN - line.length) : "";
+  process.stdout.write(`\r${line}${pad}`);
 }
 
 async function httpGetJson(url: string, token: string): Promise<unknown> {
@@ -200,8 +237,12 @@ function ensureArray(value: unknown): unknown[] {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-
+  console.log(
+    `[precode:orders] início company=${args.company} ${args.startDate}..${args.endDate} onlyInsert=${Boolean(args.onlyInsert)}`,
+  );
+  console.log("[precode:orders] conectando ao banco…");
   await AppDataSource.initialize();
+  console.log("[precode:orders] banco OK.");
   let companyRefForLog: Company | null = null;
   let platformRefForLog: Plataform | null = null;
   let processedForLog = 0;
@@ -219,6 +260,7 @@ async function main() {
     if (!company) throw new Error(`Company ${args.company} não encontrada.`);
     const companyRef: Company = company;
     companyRefForLog = companyRef;
+    console.log(`[precode:orders] empresa: ${companyRef.name ?? "(sem nome)"} (id=${companyRef.id})`);
 
     const plataform = await plataformRepo.findOne({ where: { slug: "precode" } });
     if (!plataform) throw new Error('Plataform slug="precode" não encontrada. Cadastre e instale antes.');
@@ -328,34 +370,104 @@ async function main() {
     }
 
     const listUrl = `https://www.replicade.com.br/api/v1/pedido/pedidoStatus/${args.startDate}/${args.endDate}`;
+    console.log(`[precode:orders] baixando lista pedidoStatus (${args.startDate} → ${args.endDate})…`);
     const listJson = await httpGetJson(listUrl, tokenStr);
 
     const listObj = (listJson ?? {}) as Record<string, unknown>;
     const pedidosList = ensureArray(listObj.pedido);
+    console.log(`[precode:orders] lista recebida: ${pedidosList.length} linha(s). Processando…`);
 
+    const noProgress = Boolean(args.noProgress);
     let processed = 0;
-    for (const row of pedidosList) {
+    const totalList = pedidosList.length;
+
+    for (let idx = 0; idx < pedidosList.length; idx++) {
+      const pos = idx + 1;
+      const row = pedidosList[idx];
+      let npStr = "—";
+      let codStr = "—";
+
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: "lendo linha da lista",
+      });
+
       if (!row || typeof row !== "object") continue;
       const rowObj = row as Record<string, unknown>;
       const numeroPedido = pickNumber(rowObj, "numeroPedido");
       if (!numeroPedido) continue;
+      npStr = String(numeroPedido);
+
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: "GET /erp/status (detalhe do pedido)…",
+      });
 
       const detailUrl = `https://www.replicade.com.br/api/v1/erp/status/${numeroPedido}`;
       const detailJson = await httpGetJson(detailUrl, tokenStr);
       const detailObj = (detailJson ?? {}) as Record<string, unknown>;
       const detailPedidos = ensureArray(detailObj.pedido);
       const detail = detailPedidos[0] as Record<string, unknown> | undefined;
-      if (!detail || typeof detail !== "object") continue;
+      if (!detail || typeof detail !== "object") {
+        writePrecodeOrdersProgressLine(noProgress, {
+          pos,
+          total: totalList,
+          completed: processed,
+          np: npStr,
+          codigo: codStr,
+          step: "sem detalhe na API — ignorado",
+        });
+        continue;
+      }
 
       // ORDER
       const codigoPedido = pickNumber(detail, "codigoPedido");
-      if (!codigoPedido) continue;
+      if (!codigoPedido) {
+        writePrecodeOrdersProgressLine(noProgress, {
+          pos,
+          total: totalList,
+          completed: processed,
+          np: npStr,
+          codigo: codStr,
+          step: "sem codigoPedido — ignorado",
+        });
+        continue;
+      }
+      codStr = String(codigoPedido);
+
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: "carregando pedido + cliente…",
+      });
 
       const existingOrder = await orderRepo.findOne({
         where: { company: { id: companyRef.id }, orderCode: String(codigoPedido) },
       });
       if (args.onlyInsert && existingOrder) {
         processed += 1;
+        writePrecodeOrdersProgressLine(noProgress, {
+          pos,
+          total: totalList,
+          completed: processed,
+          np: npStr,
+          codigo: codStr,
+          step: "onlyInsert: já existia — pulado",
+        });
+        if (noProgress && processed % 25 === 0) {
+          console.log(`[precode:orders] progresso onlyInsert: ${processed}/${totalList}`);
+        }
         continue;
       }
 
@@ -484,12 +596,29 @@ async function main() {
       order.platform = plataform;
       if (customer) order.customer = customer;
 
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: "salvando pedido…",
+      });
+
       order = await orderRepo.save(order);
 
       // ORDER ITEMS (substitui para manter sync)
       await itemRepo.delete({ order: { id: order.id } as Order });
 
       const itens = ensureArray(detail.itens);
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: `linhas de item: ${itens.length} (produtos/API)…`,
+      });
       for (const it of itens) {
         if (!it || typeof it !== "object") continue;
         const itObj = it as Record<string, unknown>;
@@ -512,6 +641,15 @@ async function main() {
         // eslint-disable-next-line no-await-in-loop
         await itemRepo.save(item);
       }
+
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: "estoque Avanço…",
+      });
 
       // Avanco stock: se carrier = sinônimo do operador, debitar e normalizar carrier = company.name; se cancelado, reverter
       const stockRepo = AppDataSource.getRepository(AvancoStock);
@@ -582,7 +720,20 @@ async function main() {
       }
 
       processed += 1;
+      writePrecodeOrdersProgressLine(noProgress, {
+        pos,
+        total: totalList,
+        completed: processed,
+        np: npStr,
+        codigo: codStr,
+        step: "OK",
+      });
+      if (noProgress && processed % 25 === 0) {
+        console.log(`[precode:orders] ${processed} pedido(s) concluído(s) (de ${totalList} na lista)…`);
+      }
     }
+
+    if (!noProgress) process.stdout.write("\n");
 
     const onlyInsertLog = args.onlyInsert ? " onlyInsert=true" : "";
     console.log(
