@@ -11,9 +11,7 @@ import { OrderItem } from "../../entities/OrderItem.js";
 import { Product } from "../../entities/Product.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
 import { mapPrecodeStatus } from "../../utils/status/index.js";
-import { AvancoStock } from "../../entities/Avanco/AvancoStock.js";
-import { findAvancoOperatorByCarrier } from "../../utils/avancoOperatorByCarrier.js";
-import { AvancoStockMov } from "../../entities/Avanco/AvancoStockMov.js";
+import { applyAvancoStockMovForOrder } from "../../utils/avancoApplyOrderStock.js";
 import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
 import { toGender } from "../../utils/gender.js";
@@ -533,7 +531,11 @@ async function main() {
       order.payments = (detail.pagamento ?? null) as unknown;
       order.tracking = (detail.dadosRastreio ?? null) as unknown;
       const dadosRastreio = (detail.dadosRastreio ?? {}) as Record<string, unknown>;
-      order.carrier = pickString(dadosRastreio, "transportadora");
+      order.carrier =
+        pickString(dadosRastreio, "transportadora") ??
+        pickString(detail, "transportadora") ??
+        pickString(detail, "nomeTransportadora") ??
+        null;
       order.subsidiary = pickString(dadosRastreio, "cidadeDistribuicao");
       order.timeline = (detail.dadosAcompanhamento ?? null) as unknown;
       // raw: payload do pedido "como veio" (somente dados do pedido).
@@ -651,73 +653,7 @@ async function main() {
         step: "estoque Avanço…",
       });
 
-      // Avanco stock: se carrier = sinônimo do operador, debitar e normalizar carrier = company.name; se cancelado, reverter
-      const stockRepo = AppDataSource.getRepository(AvancoStock);
-      const movRepo = AppDataSource.getRepository(AvancoStockMov);
-      const orderIdStr = String(order.id);
-      const companyOriginId = companyRef.id;
-
-      if (order.currentStatus === "cancelado") {
-        const movs = await movRepo.find({
-          where: { type: "order" as const, typeId: orderIdStr },
-        });
-        for (const mov of movs) {
-          const stock = await stockRepo.findOne({ where: { id: mov.avancoStockId } });
-          if (stock) {
-            // quantity na mov é negativa; devolver = somar o valor absoluto
-            stock.quantity = (stock.quantity ?? 0) + Math.abs(mov.quantity);
-            await stockRepo.save(stock);
-          }
-          await movRepo.remove(mov);
-        }
-      } else if (order.carrier && String(order.carrier).trim()) {
-        const operator = await findAvancoOperatorByCarrier(order.carrier);
-        if (operator) {
-          order.carrier = operator.company?.name ?? order.carrier;
-          await orderRepo.save(order);
-          const savedItems = await itemRepo.find({
-            where: { order: { id: order.id } },
-            relations: ["product"],
-          });
-          // Agrupa por product_id: uma mov por (order, stock) com quantidade total
-          const qtyByProduct = new Map<number, number>();
-          for (const oi of savedItems) {
-            const productId = oi.product?.id ?? null;
-            const qty = Math.max(0, Math.floor(Number(oi.quantity) ?? 0));
-            if (productId == null || qty <= 0) continue;
-            qtyByProduct.set(productId, (qtyByProduct.get(productId) ?? 0) + qty);
-          }
-          for (const [productId, totalQty] of qtyByProduct) {
-            const stock = await stockRepo.findOne({
-              where: {
-                companyOriginId,
-                companyLogisticId: operator.companyId,
-                productId,
-              },
-            });
-            if (!stock) continue;
-
-            const existingMov = await movRepo.findOne({
-              where: {
-                avancoStockId: stock.id,
-                type: "order" as const,
-                typeId: orderIdStr,
-              },
-            });
-            if (existingMov) continue;
-
-            const mov = movRepo.create({
-              avancoStockId: stock.id,
-              quantity: -totalQty,
-              type: "order",
-              typeId: orderIdStr,
-            });
-            await movRepo.save(mov);
-            stock.quantity = (stock.quantity ?? 0) - totalQty;
-            await stockRepo.save(stock);
-          }
-        }
-      }
+      await applyAvancoStockMovForOrder(order, orderRepo, companyRef.id, "precode:orders");
 
       processed += 1;
       writePrecodeOrdersProgressLine(noProgress, {

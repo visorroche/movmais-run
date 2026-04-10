@@ -16,6 +16,7 @@ import { toBrazilianState } from "../../utils/brazilian-states.js";
 import { toPersonType } from "../../utils/person-type.js";
 import { toGender } from "../../utils/gender.js";
 import { toActiveBoolean } from "../../utils/active-status.js";
+import { applyAvancoStockMovForOrder } from "../../utils/avancoApplyOrderStock.js";
 
 const IS_TTY = Boolean(process.stdout.isTTY);
 
@@ -1490,6 +1491,9 @@ async function main() {
               3,
             );
           }
+          // Avanço: mesma regra que Precode/Panorama (carrier + operador + avanco_stock)
+          // eslint-disable-next-line no-await-in-loop
+          await applyAvancoStockMovForOrder(savedOrder, orderRepo, companyEntity.id, "tray:orders");
         }
 
         // próxima página
