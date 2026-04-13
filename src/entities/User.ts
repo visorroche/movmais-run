@@ -23,6 +23,10 @@ export class User {
   @Column({ type: "varchar", nullable: true })
   phone?: string | null;
 
+  /** Função/cargo do usuário (texto livre). */
+  @Column({ type: "varchar", length: 191, nullable: true })
+  cargo?: string | null;
+
   @Column({ type: "boolean", default: false, name: "phone_verified" })
   phoneVerified!: boolean;
 
