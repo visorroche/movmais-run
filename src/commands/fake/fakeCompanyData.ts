@@ -75,6 +75,12 @@ function randomTimeInDayUtc(dayUtc: Date): Date {
   return new Date(Date.UTC(dayUtc.getUTCFullYear(), dayUtc.getUTCMonth(), dayUtc.getUTCDate(), h, m, s));
 }
 
+/** Remove vírgulas finais acidentais (ex.: `--company=2,`) e espaços. */
+function cleanArgValue(s: string | undefined): string | undefined {
+  if (s == null) return undefined;
+  return s.trim().replace(/,+$/g, "").trim();
+}
+
 function parseArgs(argv: string[]): {
   company: number;
   startDate: string;
@@ -94,12 +100,20 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  const company = Number(raw.get("company"));
-  const startDate = raw.get("start-date");
-  const endDate = raw.get("end-date");
+  const company = Number(cleanArgValue(raw.get("company")));
+  const startDate = cleanArgValue(raw.get("start-date"));
+  const endDate = cleanArgValue(raw.get("end-date"));
   const mode = raw.get("mode") as any;
 
-  if (!Number.isInteger(company) || company <= 0) throw new Error("Parâmetro obrigatório inválido: --company=ID");
+  if (!Number.isInteger(company) || company <= 0) {
+    const hint =
+      raw.get("company") == null && raw.size === 0
+        ? " Passe os argumentos após `--` (ex.: npm run script:fake:company-data -- --company=2 ...)."
+        : "";
+    throw new Error(
+      `Parâmetro inválido: --company=ID (inteiro positivo). Recebido: ${JSON.stringify(raw.get("company"))}.${hint}`,
+    );
+  }
   if (!startDate) throw new Error("Parâmetro obrigatório: --start-date=YYYY-MM-DD");
   if (!endDate) throw new Error("Parâmetro obrigatório: --end-date=YYYY-MM-DD");
   if (mode !== "marketplace" && mode !== "representante") {
@@ -356,18 +370,30 @@ async function ensureProducts(company: Company): Promise<Product[]> {
   return out;
 }
 
+/**
+ * Próximo order_code numérico por company. Não usar MAX(varchar): em PostgreSQL isso é lexicográfico
+ * ("99" > "100"), o que gerava colisão com códigos já existentes.
+ */
 async function getNextOrderCode(companyId: number): Promise<number> {
-  const orderRepo = AppDataSource.getRepository(Order);
-  const row = await orderRepo
-    .createQueryBuilder("o")
-    .select("MAX(o.orderCode)", "max")
-    .where("o.company_id = :companyId", { companyId })
-    .getRawOne<{ max: string | number | null }>();
-
-  const maxRaw = row?.max ?? null;
-  const maxNum = maxRaw === null ? 0 : typeof maxRaw === "number" ? maxRaw : Number(maxRaw);
-  const base = Number.isFinite(maxNum) && maxNum > 0 ? Math.floor(maxNum) : 0;
-  // garante espaço dentro de int32
+  const rows = await AppDataSource.query(
+    `
+    SELECT COALESCE(
+      MAX(
+        CASE
+          WHEN o.order_code ~ '^[0-9]+$' THEN (o.order_code)::bigint
+          ELSE NULL
+        END
+      ),
+      0
+    ) AS max_num
+    FROM orders o
+    WHERE o.company_id = $1
+    `,
+    [companyId],
+  );
+  const maxRaw = rows?.[0]?.max_num;
+  const maxNum = maxRaw != null ? Number(maxRaw) : 0;
+  const base = Number.isFinite(maxNum) && maxNum >= 0 ? Math.floor(maxNum) : 0;
   const next = Math.min(base + 1, 2_000_000_000);
   if (next <= 0) throw new Error("Falha ao calcular próximo order_code.");
   return next;

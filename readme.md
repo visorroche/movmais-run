@@ -42,6 +42,24 @@ Entidades que não devem entrar no resumo (ex.: tabelas de sistema) ficam em `SK
 npm run schema:resume-md
 ```
 
+### Dados de teste (fake)
+
+Gera dados sintéticos para uma **company** no intervalo `--start-date`..`--end-date` (UTC): produtos, clientes, pedidos e itens (com nomes/valores aleatórios). Implementação em `src/commands/fake/fakeCompanyData.ts`.
+
+É obrigatório escolher **um** modo:
+
+- **`--marketplace`**: pedidos com canal marketplace e metadados de comissão.
+- **`--representante`**: pedidos ligados a representantes (garante estrutura de supervisores/representantes fake).
+
+```bash
+npm run script:fake:company-data -- --company=1 --start-date=2026-01-01 --end-date=2026-01-31 --marketplace
+npm run script:fake:company-data -- --company=1 --start-date=2026-01-01 --end-date=2026-01-31 --representante
+```
+
+O **`--`** depois do nome do script é obrigatório para o npm repassar os parâmetros ao Node. Sem isso, `--company` não chega ao comando. Não use vírgulas nos valores (`--company=2` e não `--company=2,`).
+
+Use apenas em ambiente de desenvolvimento / base de testes.
+
 ## Integrações (execução manual)
 
 ### Precode
