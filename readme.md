@@ -4,6 +4,7 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 
 | Tipo | Plataforma | Job (interno) | Frequência | Observações |
 |---|---|---|---|---|
+| Mensagens recorrentes (IA / WhatsApp) | API Movmais | `recurrent-messages:tick` | **a cada 10 min** | Chama `POST {MOVMAIS_API_URL}/internal/recurrent-messages/tick` com Bearer. Ver envs abaixo. |
 | Freight Quotes | Allpost | `allpost:quotes` | **a cada 30 min** | Roda na inicialização após ~2s. |
 | Freight Orders | Allpost | `allpost:orders` | **a cada 1 hora** | Roda na inicialização após ~3s. Range sobreposto (**últimos 2 dias UTC**) para capturar atualizações. |
 | Orders | Precode | `precode:orders` | **a cada 30 min** | Roda na inicialização após ~4s. Range curto (**ontem..hoje UTC**) |
@@ -14,9 +15,42 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 | Products | AnyMarket | `anymarket:products` | **a cada 3 horas** | Roda na inicialização (após ~12s). Config: `{"token":"..."}` |
 | Database B2B | Database | `databaseB2b:*` | **a cada 1 hora** | Roda na inicialização. Usa config em `company_platforms.config`. |
 
+### Variáveis de ambiente (mensagens recorrentes)
+
+Na **API**: `RECURRENT_MESSAGES_CRON_TOKEN` (segredo compartilhado), opcionalmente `RECURRENT_MESSAGES_WINDOW_MINUTES` (padrão 10), `RECURRENT_MESSAGES_CRON_TZ`, `RECURRENT_MESSAGES_GREETING_TZ`.
+
+No **script-bi** (scheduler ou comando manual): `MOVMAIS_API_URL` (URL base da API, sem barra final), `RECURRENT_MESSAGES_CRON_TOKEN` (igual ao da API).
+
+Execução manual:
+
+```bash
+npm run script:recurrent-messages:tick
+```
+
 ## Comandos para rodar manualmente
 
 Obs.: para passar parâmetros (`--company`, `--start-date`, etc) via `npm run`, use `--` antes.
+
+### Mensagens recorrentes (tick na API)
+
+Mesmas variáveis da tabela acima: `MOVMAIS_API_URL`, `RECURRENT_MESSAGES_CRON_TOKEN` (igual ao `.env` da API).
+
+O comando carrega automaticamente **`script-bi/.env`** (via `dotenv`). Rode sempre a partir da pasta `script-bi` para o `.env` local ser encontrado.
+
+```bash
+cd script-bi
+npm run script:recurrent-messages:tick
+```
+
+Equivalente HTTP (substitua URL e token):
+
+```bash
+curl -sS -X POST "${MOVMAIS_API_URL}/internal/recurrent-messages/tick" \
+  -H "Authorization: Bearer ${RECURRENT_MESSAGES_CRON_TOKEN}" \
+  -H "Content-Type: application/json"
+```
+
+A API responde JSON com `ok`, `rulesChecked`, `messagesSent`, `errors`, etc.
 
 ## Atualizando o banco de dados
 

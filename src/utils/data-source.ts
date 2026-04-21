@@ -36,6 +36,7 @@ import { ThreadMessages } from "../entities/ThreadMessages.js";
 import { AiAgentFeedback } from "../entities/AiAgentFeedback.js";
 import { Goals } from "../entities/Goals.js";
 import { SecurityCodes } from "../entities/SecurityCodes.js";
+import { RecurrentMessage } from "../entities/RecurrentMessage.js";
 import { SnakeNamingStrategy } from "./snake-naming-strategy.js";
 
 export const AppDataSource = new DataSource({
@@ -98,6 +99,7 @@ export const AppDataSource = new DataSource({
     AiAgentFeedback,
     Goals,
     SecurityCodes,
+    RecurrentMessage,
   ],
   migrations: [],
   subscribers: [],

@@ -26,7 +26,8 @@ type JobName =
   | "databaseB2b:products"
   | "databaseB2b:orders"
   | "databaseB2b:sync"
-  | "resume:freight";
+  | "resume:freight"
+  | "recurrent-messages:tick";
 
 const JOB_LOCKS = new Map<JobName, boolean>();
 let shuttingDown = false;
@@ -599,6 +600,7 @@ async function runDatabaseB2bPipelineForCompanies(platformSlugs: string[], start
 }
 
 async function main() {
+  const EVERY_10_MIN = 10 * 60 * 1000;
   const EVERY_30_MIN = 30 * 60 * 1000;
   const EVERY_1_HOUR = 60 * 60 * 1000;
   const EVERY_3_HOURS = 3 * 60 * 60 * 1000;
@@ -700,6 +702,15 @@ async function main() {
       );
     });
 
+  const tickRecurrentMessages = () =>
+    runJob("recurrent-messages:tick", async () => {
+      await runNodeScript(
+        resolveDistScript("commands/recurrentMessagesTick.js"),
+        [],
+        "recurrent-messages:tick",
+      );
+    });
+
   // job: database B2B (a cada 1h) — período: ontem até +30 dias (inclui vendas futuras)
   const DBB2B_SLUGS = ["b2b_database", "database_b2b", "databaseb2b", "databaseB2b"];
   const tickDatabaseB2bSync = () =>
@@ -712,10 +723,11 @@ async function main() {
 
   console.log("[scheduler] iniciado.");
   console.log(
-    "[scheduler] agendas: allpost-quotes=30min, allpost-freight-orders=1h, orders=30min (precode/tray/anymarket/panorama), products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
+    "[scheduler] agendas: recurrent-messages=10min, allpost-quotes=30min, allpost-freight-orders=1h, orders=30min (precode/tray/anymarket/panorama), products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
   );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
+  setTimeout(() => void tickRecurrentMessages(), 1_000);
   setTimeout(() => void tickAllpost(), 2_000);
   setTimeout(() => void tickAllpostFreightOrders(), 3_000);
   setTimeout(() => void tickPrecodeOrders(), 4_000);
@@ -729,6 +741,7 @@ async function main() {
   setTimeout(() => void tickResumeFreight(), 30_000);
 
   const timers: NodeJS.Timeout[] = [];
+  timers.push(setInterval(() => void tickRecurrentMessages(), EVERY_10_MIN));
   timers.push(setInterval(() => void tickAllpost(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickAllpostFreightOrders(), EVERY_1_HOUR));
   timers.push(setInterval(() => void tickPrecodeOrders(), EVERY_30_MIN));
