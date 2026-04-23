@@ -6,6 +6,17 @@ export type PlataformType = "ecommerce" | "logistic" | "b2b";
 /** Entidade de referência para parâmetros do tipo "schema" (mapeamento tabela/colunas do banco do cliente). */
 export type PlataformSchemaEntity = "products" | "customers" | "orders" | "representatives";
 
+/**
+ * Campos de pedido reconhecidos no `orders_schema.orderFields` (Database B2B / plataforma schema).
+ * Espelha colunas persistidas em `orders` — ex.: `bonificacao` (0 normal, 1 bonificação), `active`.
+ */
+export type DatabaseB2bOrderSchemaFieldHint =
+  | "bonificacao"
+  | "active"
+  | "external_id"
+  | "order_code"
+  | "order_date";
+
 export type PlataformParameter = {
   label: string;
   name: string;

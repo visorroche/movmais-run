@@ -40,6 +40,14 @@ export class Order {
   @Column({ type: "varchar", nullable: true })
   currentStatusCode?: string | null; // codigoStatusAtual
 
+  /** 1 = ativo; 0 = venda removida no cliente (soft delete). */
+  @Column({ type: "smallint", default: 1 })
+  active!: number;
+
+  /** 0 = venda normal; 1 = bonificação. */
+  @Column({ type: "smallint", default: 0, name: "bonificacao" })
+  bonificacao!: number;
+
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   shippingAmount?: string | null; // valorFrete
 

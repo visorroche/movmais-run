@@ -5,7 +5,7 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 | Tipo | Plataforma | Job (interno) | Frequência | Observações |
 |---|---|---|---|---|
 | Mensagens recorrentes (IA / WhatsApp) | API Movmais | `recurrent-messages:tick` | **a cada 10 min** | Chama `POST {MOVMAIS_API_URL}/internal/recurrent-messages/tick` com Bearer. Ver envs abaixo. |
-| Freight Quotes | Allpost | `allpost:quotes` | **a cada 30 min** | Roda na inicialização após ~2s. |
+| Freight Quotes | Allpost | `allpost:quotes` | **a cada 1 hora** | Roda na inicialização após ~2s. Mesmo intervalo que freight orders. |
 | Freight Orders | Allpost | `allpost:orders` | **a cada 1 hora** | Roda na inicialização após ~3s. Range sobreposto (**últimos 2 dias UTC**) para capturar atualizações. |
 | Orders | Precode | `precode:orders` | **a cada 30 min** | Roda na inicialização após ~4s. Range curto (**ontem..hoje UTC**) |
 | Orders | Tray | `tray:orders` | **a cada 30 min** | Roda na inicialização após ~6s. Range curto (**ontem..hoje UTC**) |
@@ -17,7 +17,7 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 
 ### Variáveis de ambiente (mensagens recorrentes)
 
-Na **API**: `RECURRENT_MESSAGES_CRON_TOKEN` (segredo compartilhado), opcionalmente `RECURRENT_MESSAGES_WINDOW_MINUTES` (padrão 10), `RECURRENT_MESSAGES_CRON_TZ`, `RECURRENT_MESSAGES_GREETING_TZ`.
+Na **API**: `RECURRENT_MESSAGES_CRON_TOKEN` (segredo compartilhado), `RECURRENT_MESSAGES_CRON_TZ`, `RECURRENT_MESSAGES_GREETING_TZ`. Opcional: **`RECURRENT_MESSAGES_MAX_CATCHUP_HOURS`** (padrão **24**) — após esse atraso em relação ao horário agendado pelo cron, o disparo não “recupera” mais a ocorrência perdida até a próxima janela. **`RECURRENT_MESSAGES_WINDOW_MINUTES`** ficou legado e não define mais o disparo (o scheduler do script-bi segue chamando o tick ~a cada 10 min).
 
 No **script-bi** (scheduler ou comando manual): `MOVMAIS_API_URL` (URL base da API, sem barra final), `RECURRENT_MESSAGES_CRON_TOKEN` (igual ao da API).
 

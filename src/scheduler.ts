@@ -619,7 +619,7 @@ async function main() {
 
   await ensureDb();
 
-  // job: allpost freight quotes (a cada 30 min)
+  // job: Allpost freight quotes — alinhado a pedidos freight (a cada 1 h)
   const tickAllpost = () =>
     runJob("allpost:quotes", async () => {
       await runForCompanies("allpost", "commands/allpost/allpostFreightQuotes.js", (companyId) => [`--company=${companyId}`]);
@@ -723,7 +723,7 @@ async function main() {
 
   console.log("[scheduler] iniciado.");
   console.log(
-    "[scheduler] agendas: recurrent-messages=10min, allpost-quotes=30min, allpost-freight-orders=1h, orders=30min (precode/tray/anymarket/panorama), products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
+    "[scheduler] agendas: recurrent-messages=10min, allpost-quotes=1h, allpost-freight-orders=1h, orders=30min (precode/tray/anymarket/panorama), products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
   );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
@@ -742,7 +742,7 @@ async function main() {
 
   const timers: NodeJS.Timeout[] = [];
   timers.push(setInterval(() => void tickRecurrentMessages(), EVERY_10_MIN));
-  timers.push(setInterval(() => void tickAllpost(), EVERY_30_MIN));
+  timers.push(setInterval(() => void tickAllpost(), EVERY_1_HOUR));
   timers.push(setInterval(() => void tickAllpostFreightOrders(), EVERY_1_HOUR));
   timers.push(setInterval(() => void tickPrecodeOrders(), EVERY_30_MIN));
   timers.push(setInterval(() => void tickTrayOrders(), EVERY_30_MIN));

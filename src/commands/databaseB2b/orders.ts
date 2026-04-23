@@ -41,6 +41,41 @@ function orderCodeStringFromMapped(raw: unknown): string | null {
   return s || null;
 }
 
+/** Mapeia valor do cliente para `orders.active` (1 ativo, 0 removido). Sem mapeamento no schema, assume 1. */
+function toOrderActiveFlag(raw: unknown): number {
+  if (raw === null || raw === undefined) return 1;
+  if (typeof raw === "boolean") return raw ? 1 : 0;
+  const n = Number(raw);
+  if (Number.isFinite(n)) {
+    if (n === 0) return 0;
+    if (n === 1) return 1;
+  }
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return 1;
+  if (s === "0" || s === "false" || s === "n" || s === "no" || s === "inactive" || s === "deleted" || s === "excluido" || s === "excluído") {
+    return 0;
+  }
+  return 1;
+}
+
+/** Mapeia para `orders.bonificacao`: 1 = bonificação, 0 = venda normal. Sem mapeamento no schema, assume 0. */
+function toBonificacaoFlag(raw: unknown): number {
+  if (raw === null || raw === undefined || raw === "") return 0;
+  if (typeof raw === "boolean") return raw ? 1 : 0;
+  const n = Number(raw);
+  if (Number.isFinite(n)) {
+    if (n === 0) return 0;
+    if (n === 1) return 1;
+  }
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return 0;
+  if (s === "1" || s === "true" || s === "s" || s === "sim" || s === "bonificacao" || s === "bonificação" || s === "bonus" || s === "b") {
+    return 1;
+  }
+  if (s === "0" || s === "false" || s === "n" || s === "nao" || s === "não") return 0;
+  return 0;
+}
+
 function toNumberLoose(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -986,6 +1021,12 @@ async function main() {
         }
         order.currentStatus = (applyFieldMapping(orderFields.current_status, first) as any) ?? null;
         order.currentStatusCode = (applyFieldMapping(orderFields.current_status_code, first) as any) ?? null;
+        order.active = (orderFields as any).active
+          ? toOrderActiveFlag(applyFieldMapping((orderFields as any).active, first))
+          : 1;
+        order.bonificacao = (orderFields as any).bonificacao
+          ? toBonificacaoFlag(applyFieldMapping((orderFields as any).bonificacao, first))
+          : 0;
         order.deliveryState = (applyFieldMapping(orderFields.delivery_state, first) as any) ?? null;
         order.deliveryCity = (applyFieldMapping(orderFields.delivery_city, first) as any) ?? null;
         order.deliveryNeighborhood = (applyFieldMapping(orderFields.delivery_neighborhood, first) as any) ?? null;
@@ -1170,6 +1211,12 @@ async function main() {
       }
       order.currentStatus = (applyFieldMapping(orderFields.current_status, first) as any) ?? order.currentStatus ?? null;
       order.currentStatusCode = (applyFieldMapping(orderFields.current_status_code, first) as any) ?? order.currentStatusCode ?? null;
+      order.active = (orderFields as any).active
+        ? toOrderActiveFlag(applyFieldMapping((orderFields as any).active, first))
+        : (order.active ?? 1);
+      order.bonificacao = (orderFields as any).bonificacao
+        ? toBonificacaoFlag(applyFieldMapping((orderFields as any).bonificacao, first))
+        : (order.bonificacao ?? 0);
 
       order.deliveryState = (applyFieldMapping(orderFields.delivery_state, first) as any) ?? order.deliveryState ?? null;
       order.deliveryCity = (applyFieldMapping(orderFields.delivery_city, first) as any) ?? order.deliveryCity ?? null;

@@ -49,6 +49,13 @@ export class AvancoLogisticOrder {
   @Column({ name: "delivery_days", type: "integer", nullable: true })
   deliveryDays?: number | null;
 
+  @Column({ name: "received_at", type: "timestamptz", nullable: true })
+  receivedAt?: Date | null;
+
+  /** Histórico [{ status, at }]; espelha coluna `status_change_json` na API. */
+  @Column({ name: "status_change_json", type: "jsonb", nullable: true })
+  status_change_json?: Array<{ status: string; at: string }> | null;
+
   @Column({ name: "created_at", type: "timestamptz", default: () => "now()" })
   createdAt!: Date;
 }
