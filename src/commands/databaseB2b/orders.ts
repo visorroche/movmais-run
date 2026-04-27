@@ -18,7 +18,6 @@ import {
   parseYmd,
   parseTimestamp,
   schemaFieldName,
-  getDatabaseB2bLastProcessedAt,
   updateDatabaseB2bLastProcessedAt,
   describeDatabaseB2bConfig,
   collectSourceColumnsFromMapping,
@@ -111,6 +110,19 @@ function parseDateOnlyLoose(value: unknown): string | null {
   if (ymd) return ymd;
   const ts = parseTimestamp(value);
   return ts ? ts.toISOString().slice(0, 10) : null;
+}
+
+/** Incremental Database B2B: último synced_at já aplicado no pedido (não usar só `orders_schema.last_processed_at`). */
+function orderEntitySourceSyncedAt(o: Order | undefined | null): Date | null {
+  if (!o) return null;
+  const raw = (o as any).sourceSyncedAt ?? (o as any).source_synced_at;
+  return parseTimestamp(raw as any);
+}
+
+function itemEntitySourceSyncedAt(it: OrderItem | undefined | null): Date | null {
+  if (!it) return null;
+  const raw = (it as any).sourceSyncedAt ?? (it as any).source_synced_at;
+  return parseTimestamp(raw as any);
 }
 
 type CustomerLookupField = "external_id" | "internal_cod" | "tax_id" | "email";
@@ -272,7 +284,6 @@ async function main() {
     console.warn("[databaseB2b:orders] falha ao gravar log inicial (PROCESSANDO):", e);
   }
   const singleTable = Boolean(schema.singleTable);
-  const lastProcessedAt = getDatabaseB2bLastProcessedAt(cfg, "orders_schema");
   const syncedAtCol = schemaFieldName((orderFields as any).synced_at) || schemaFieldName((itemFields as any).synced_at) || "";
   const syncedAtMapping: any = (orderFields as any).synced_at ?? (itemFields as any).synced_at;
   const orderExternalIdCol = schemaFieldName((orderFields as any).external_id);
@@ -311,7 +322,7 @@ async function main() {
   console.log(
     `[databaseB2b:orders] iniciado company=${args.company}${range}${onlyInsertLog} platform=${meta?.platformSlug ?? "?"} table=${table} singleTable=${
       singleTable ? "true" : "false"
-    } incremental=${!args.force && syncedAtCol && lastProcessedAt ? "on" : "off"} force=${args.force ? "on" : "off"}`,
+    } incremental=${!args.force && syncedAtCol ? "on" : "off"} skip_by=order.source_synced_at force=${args.force ? "on" : "off"}`,
   );
 
   let ext = buildExternalClient(cfg);
@@ -354,7 +365,7 @@ async function main() {
 
     // Sempre buscar por intervalo de datas (order_date). synced_at NÃO filtra o fetch:
     // - Insert: se não temos o pedido, sempre inserir.
-    // - Update: só atualizar se synced_at do cliente for maior que lastProcessedAt (evita sobrescrever com dado antigo).
+    // - Update incremental: comparar synced_at por pedido (`orders.source_synced_at`) e por linha (`order_items.source_synced_at`), não só `orders_schema.last_processed_at`.
     __stage = "fetch_external";
     let expectedRowCount: number | null = null;
     let expectedDistinctOrderCode: number | null = null;
@@ -984,7 +995,7 @@ async function main() {
       const hasTotalAmountMapping = Boolean(schemaFieldName((orderFields as any).total_amount).trim());
       const ordersWithRows: { order: Order; orderRows: Record<string, any>[] }[] = [];
       let bulkSkippedNoOrderCode = 0;
-      for (const { orderExternalId, orderRows } of entries) {
+      for (const { orderExternalId, orderRows, groupSyncedAt } of entries) {
         const first = orderRows[0]!;
         const orderCode = orderCodeStringFromMapped(applyFieldMapping(orderFields.order_code, first));
         if (!orderCode) {
@@ -1045,6 +1056,7 @@ async function main() {
           const r = repsByLookup.get(repKey);
           if (r) order.representative = r;
         }
+        if (groupSyncedAt) order.sourceSyncedAt = groupSyncedAt;
         ordersWithRows.push({ order, orderRows });
       }
       console.log(
@@ -1092,6 +1104,8 @@ async function main() {
           item.assistantComission = (applyFieldMapping(itemFields.assistant_comission, row) as any) ?? "0";
           item.supervisorComission = (applyFieldMapping(itemFields.supervisor_comission, row) as any) ?? "0";
           item.metadata = (applyFieldMapping(itemFields.metadata, row) as any) ?? null;
+          const rowItemSyncedAt = syncedAtMapping ? parseTimestamp(applyFieldMapping(syncedAtMapping, row)) : null;
+          item.sourceSyncedAt = rowItemSyncedAt ?? null;
           allItems.push(item);
         }
       }
@@ -1164,14 +1178,9 @@ async function main() {
         logProgress();
         continue;
       }
-      // Com --force reprocessa tudo; sem --force, update só quando synced_at do cliente for mais recente.
-      if (
-        !args.force &&
-        (existing || legacy) &&
-        lastProcessedAt &&
-        groupSyncedAt &&
-        groupSyncedAt.getTime() <= lastProcessedAt.getTime()
-      ) {
+      // Com --force reprocessa tudo; sem --force, pula só se o max synced_at do grupo no cliente não superar o já aplicado neste pedido.
+      const storedOrderSync = orderEntitySourceSyncedAt(existing ?? legacy ?? undefined);
+      if (!args.force && (existing || legacy) && groupSyncedAt && storedOrderSync && groupSyncedAt.getTime() <= storedOrderSync.getTime()) {
         skippedExisting += 1;
         logProgress();
         continue;
@@ -1244,6 +1253,8 @@ async function main() {
       const supervisorKey = String(applyFieldMapping(orderFields.supervisor_id, first) ?? "").trim();
       if (supervisorKey) (order as any).supervisor = supervisorsByLookup.get(supervisorKey) ?? null;
 
+      if (groupSyncedAt) order.sourceSyncedAt = groupSyncedAt;
+
       try {
         // eslint-disable-next-line no-await-in-loop
         order = await orderRepoNow.save(order);
@@ -1289,13 +1300,24 @@ async function main() {
         if (!itemExternalId) continue;
         incomingItemExternalIdsPerOrder.push(itemExternalId);
 
+        const rowItemSyncedAt = syncedAtMapping ? parseTimestamp(applyFieldMapping(syncedAtMapping, row)) : null;
+        const existingItem = existingItemsByExternalId.get(itemExternalId) ?? null;
+        if (
+          !args.force &&
+          existingItem &&
+          rowItemSyncedAt &&
+          itemEntitySourceSyncedAt(existingItem) &&
+          rowItemSyncedAt.getTime() <= itemEntitySourceSyncedAt(existingItem)!.getTime()
+        ) {
+          continue;
+        }
+
         const productKey = String(applyFieldMapping((itemFields as any).product_id, row) ?? "").trim();
         const productByKey = productKey ? productsByLookup.get(productKey) ?? null : null;
 
         const sku = toIntLoose(applyFieldMapping(itemFields.sku, row));
         const product = productByKey ?? (sku ? productsBySku.get(String(sku)) ?? null : null);
 
-        const existingItem = existingItemsByExternalId.get(itemExternalId) ?? null;
         const item = existingItem ?? itemRepoNow.create({ company, order, externalId: itemExternalId });
         existingItemsByExternalId.set(itemExternalId, item);
 
@@ -1313,12 +1335,10 @@ async function main() {
         item.assistantComission = (applyFieldMapping(itemFields.assistant_comission, row) as any) ?? "0";
         item.supervisorComission = (applyFieldMapping(itemFields.supervisor_comission, row) as any) ?? "0";
         item.metadata = (applyFieldMapping(itemFields.metadata, row) as any) ?? null;
+        item.sourceSyncedAt = rowItemSyncedAt ?? null;
         itemsToSaveByExternalId.set(itemExternalId, item);
 
-        if (syncedAtMapping) {
-          const d = parseTimestamp(applyFieldMapping(syncedAtMapping, row));
-          if (d && (!maxSyncedAt || d.getTime() > maxSyncedAt.getTime())) maxSyncedAt = d;
-        }
+        if (rowItemSyncedAt && (!maxSyncedAt || rowItemSyncedAt.getTime() > maxSyncedAt.getTime())) maxSyncedAt = rowItemSyncedAt;
       }
 
       const itemsToSave = Array.from(itemsToSaveByExternalId.values());

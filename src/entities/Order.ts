@@ -62,6 +62,10 @@ export class Order {
   @Column({ type: "date", nullable: true, name: "delivery_date" })
   deliveryDate?: string | null;
 
+  /** Último `synced_at` do cliente já aplicado neste pedido (incremental Database B2B por pedido; não usar só o checkpoint global na config). */
+  @Column({ type: "timestamptz", nullable: true, name: "source_synced_at" })
+  sourceSyncedAt?: Date | null;
+
   // total do pedido
   @Column({ type: "numeric", precision: 14, scale: 2, nullable: true })
   totalAmount?: string | null; 

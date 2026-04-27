@@ -69,6 +69,10 @@ export class OrderItem {
   // NOMAP
   @Column({ type: "jsonb", nullable: true })
   metadata?: unknown;
+
+  /** Último `synced_at` da linha no cliente já aplicado neste item (incremental Database B2B por linha). */
+  @Column({ type: "timestamptz", nullable: true, name: "source_synced_at" })
+  sourceSyncedAt?: Date | null;
 }
 
 
