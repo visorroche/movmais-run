@@ -53,6 +53,10 @@ export class Plataform {
   @Column({ type: "varchar", nullable: true })
   link?: string | null;
 
+  /** Instruções de uso exibidas no topo do modal de configuração (app). */
+  @Column({ type: "text", nullable: true })
+  instructions?: string | null;
+
   @Column({ type: "jsonb" })
   parameters?: PlataformParameter[];
 

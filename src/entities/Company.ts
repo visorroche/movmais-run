@@ -50,4 +50,8 @@ export class Company {
   /** Permite lançar pedidos manualmente na tela de Pedidos (somente admin altera). */
   @Column({ name: 'launch_orders', type: 'boolean', default: false })
   launch_orders!: boolean;
+
+  /** Usa cadastro interno de categorias (`products.category_id`) em vez de strings livres. */
+  @Column({ name: 'use_category_registry', type: 'boolean', default: false })
+  use_category_registry!: boolean;
 }

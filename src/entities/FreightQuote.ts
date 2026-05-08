@@ -8,6 +8,8 @@ import { Plataform } from "./Plataform.js";
  */
 @Entity({ name: "freight_quotes" })
 @Index("idx_freight_quotes_company_date", ["company", "date"])
+/** Filtros por janela de tempo em `quoted_at` (timestamptz) — `date` sozinho não substitui. */
+@Index("idx_freight_quotes_company_quoted_at", ["company", "quotedAt"])
 @Unique("UQ_freight_quotes_company_id_platform_id_quote_id", ["company", "platform", "quoteId"])
 export class FreightQuote {
   @PrimaryGeneratedColumn()

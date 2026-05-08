@@ -6,6 +6,7 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  OneToMany,
 } from "typeorm";
 import { Company } from "./Company.js";
 
@@ -38,6 +39,20 @@ export class CustomDashboards {
   /** Se preenchido: este registro é um rascunho de edição do dashboard publicado com id = original_id. Ao publicar, aplica no original e remove o draft. */
   @Column({ type: "int", nullable: true, name: "original_id" })
   original_id!: number | null;
+
+  /** Opcional: dashboard “pai” para agrupar no menu / breadcrumb (ex.: Representantes → filho “Venda do dia”). */
+  @Column({ type: "int", nullable: true, name: "parent_id" })
+  parent_id!: number | null;
+
+  @ManyToOne(() => CustomDashboards, (d: CustomDashboards) => d.children, {
+    onDelete: "SET NULL",
+    nullable: true,
+  })
+  @JoinColumn({ name: "parent_id" })
+  parent?: CustomDashboards | null;
+
+  @OneToMany(() => CustomDashboards, (d: CustomDashboards) => d.parent)
+  children?: CustomDashboards[];
 
   /** only = só o user_id vê; all = todos os usuários da empresa (só para published). */
   @Column({ type: "varchar", length: 10, default: "only" })
