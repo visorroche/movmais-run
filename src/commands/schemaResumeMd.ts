@@ -36,6 +36,7 @@ const SKIP_ENTITIES = [
   "User",
   "Plataform",
   "RecurrentMessage",
+  "CompanyMemory",
 ];
 
 const ENTITIES_DIR = path.resolve(__dirname, "../../src/entities");
