@@ -95,13 +95,30 @@ function startHttpServer() {
 
   const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 
-  const SCRIPT_MAP: Record<
-    string,
-    Record<
-      string,
-      { scriptRel: string; buildArgs: (p: { companyId: number; startDate?: string; endDate?: string; onlyInsert?: boolean }) => string[] }
-    >
-  > = {
+  type RunScriptParams = {
+    companyId: number;
+    startDate?: string;
+    endDate?: string;
+    onlyInsert?: boolean;
+    force?: boolean;
+  };
+
+  const b2bCompanyArgv = (p: RunScriptParams) => {
+    const argv = [`--company=${p.companyId}`];
+    if (p.force) argv.push("--force");
+    return argv;
+  };
+
+  const b2bOrdersArgv = (p: RunScriptParams) => {
+    const argv = [`--company=${p.companyId}`];
+    if (p.startDate) argv.push(`--start-date=${p.startDate}`);
+    if (p.endDate) argv.push(`--end-date=${p.endDate}`);
+    if (p.onlyInsert) argv.push(`--onlyInsert`);
+    if (p.force) argv.push("--force");
+    return argv;
+  };
+
+  const SCRIPT_MAP: Record<string, Record<string, { scriptRel: string; buildArgs: (p: RunScriptParams) => string[] }>> = {
     tray: {
       orders: {
         scriptRel: "commands/tray/trayOrders.js",
@@ -170,89 +187,65 @@ function startHttpServer() {
     b2b_database: {
       representatives: {
         scriptRel: "commands/databaseB2b/representatives.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       customers_groups: {
         scriptRel: "commands/databaseB2b/customersGroups.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       customers: {
         scriptRel: "commands/databaseB2b/customers.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       products: {
         scriptRel: "commands/databaseB2b/products.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       orders: {
         scriptRel: "commands/databaseB2b/orders.js",
-        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
-          const argv = [`--company=${companyId}`];
-          if (startDate) argv.push(`--start-date=${startDate}`);
-          if (endDate) argv.push(`--end-date=${endDate}`);
-          if (onlyInsert) argv.push(`--onlyInsert`);
-          return argv;
-        },
+        buildArgs: b2bOrdersArgv,
       },
     },
     database_b2b: {
       representatives: {
         scriptRel: "commands/databaseB2b/representatives.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       customers_groups: {
         scriptRel: "commands/databaseB2b/customersGroups.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       customers: {
         scriptRel: "commands/databaseB2b/customers.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       products: {
         scriptRel: "commands/databaseB2b/products.js",
-        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+        buildArgs: b2bCompanyArgv,
       },
       orders: {
         scriptRel: "commands/databaseB2b/orders.js",
-        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
-          const argv = [`--company=${companyId}`];
-          if (startDate) argv.push(`--start-date=${startDate}`);
-          if (endDate) argv.push(`--end-date=${endDate}`);
-          if (onlyInsert) argv.push(`--onlyInsert`);
-          return argv;
-        },
+        buildArgs: b2bOrdersArgv,
       },
     },
     databaseb2b: {
-      representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
-      customers_groups: { scriptRel: "commands/databaseB2b/customersGroups.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
-      customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
-      products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: b2bCompanyArgv },
+      customers_groups: { scriptRel: "commands/databaseB2b/customersGroups.js", buildArgs: b2bCompanyArgv },
+      customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: b2bCompanyArgv },
+      products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: b2bCompanyArgv },
       orders: {
         scriptRel: "commands/databaseB2b/orders.js",
-        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
-          const argv = [`--company=${companyId}`];
-          if (startDate) argv.push(`--start-date=${startDate}`);
-          if (endDate) argv.push(`--end-date=${endDate}`);
-          if (onlyInsert) argv.push(`--onlyInsert`);
-          return argv;
-        },
+        buildArgs: b2bOrdersArgv,
       },
     },
     databaseB2b: {
-      representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
-      customers_groups: { scriptRel: "commands/databaseB2b/customersGroups.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
-      customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
-      products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: ({ companyId }) => [`--company=${companyId}`] },
+      representatives: { scriptRel: "commands/databaseB2b/representatives.js", buildArgs: b2bCompanyArgv },
+      customers_groups: { scriptRel: "commands/databaseB2b/customersGroups.js", buildArgs: b2bCompanyArgv },
+      customers: { scriptRel: "commands/databaseB2b/customers.js", buildArgs: b2bCompanyArgv },
+      products: { scriptRel: "commands/databaseB2b/products.js", buildArgs: b2bCompanyArgv },
       orders: {
         scriptRel: "commands/databaseB2b/orders.js",
-        buildArgs: ({ companyId, startDate, endDate, onlyInsert }) => {
-          const argv = [`--company=${companyId}`];
-          if (startDate) argv.push(`--start-date=${startDate}`);
-          if (endDate) argv.push(`--end-date=${endDate}`);
-          if (onlyInsert) argv.push(`--onlyInsert`);
-          return argv;
-        },
+        buildArgs: b2bOrdersArgv,
       },
     },
     panorama: {
@@ -296,6 +289,7 @@ function startHttpServer() {
         const startDate = body?.start_date ? String(body.start_date).trim() : undefined;
         const endDate = body?.end_date ? String(body.end_date).trim() : undefined;
         const onlyInsert = Boolean(body?.only_insert ?? body?.onlyInsert);
+        const force = Boolean(body?.force ?? body?.forceRun);
 
         if (!platform || !SCRIPT_MAP[platform]) return json(res, 400, { message: "platform inválido." });
         if (!script || !SCRIPT_MAP[platform]?.[script]) return json(res, 400, { message: "script inválido." });
@@ -308,9 +302,10 @@ function startHttpServer() {
 
         const { scriptRel, buildArgs } = SCRIPT_MAP[platform][script];
         const scriptPath = resolveDistScript(scriptRel);
-        const params: { companyId: number; startDate?: string; endDate?: string; onlyInsert?: boolean } = {
+        const params: RunScriptParams = {
           companyId,
           onlyInsert,
+          force,
         };
         if (startDate) params.startDate = startDate;
         if (endDate) params.endDate = endDate;
