@@ -364,7 +364,9 @@ async function main() {
         entity.ncm = pickString(nbmObj, "id");
         if (!entity.manualAttributesLocked)
           entity.category = pickString(categoryObj, "name") ?? pickString(categoryObj, "path");
-        entity.externalCategoryId = pickNumber(categoryObj, "id");
+        const externalCatId = pickNumber(categoryObj, "id") ?? pickString(categoryObj, "id");
+        entity.externalCategoryId =
+          externalCatId == null || String(externalCatId).trim() === "" ? null : String(externalCatId).trim();
         // Dimensões e peso no root do produto: weight, length, width, height (números)
         entity.weight = toNumericString(pickNumber(p, "weight") ?? pickString(p, "weight"));
         entity.lengthCm = toNumericString(pickNumber(p, "length") ?? pickString(p, "length"));

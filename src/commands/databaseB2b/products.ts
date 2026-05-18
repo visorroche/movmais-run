@@ -510,8 +510,9 @@ async function main() {
         product.category = (applyFieldMapping(fields.category, row) as any) ?? product.category ?? null;
         const externalCategoryIdRaw = applyFieldMapping(fields.external_category_id ?? (fields as any).category_id, row);
         product.externalCategoryId =
-          externalCategoryIdRaw == null || String(externalCategoryIdRaw).trim() === "" ? null : Number(externalCategoryIdRaw);
-        if (product.externalCategoryId != null && !Number.isFinite(product.externalCategoryId)) product.externalCategoryId = null;
+          externalCategoryIdRaw == null || String(externalCategoryIdRaw).trim() === ""
+            ? null
+            : String(externalCategoryIdRaw).trim();
         product.subcategory = (applyFieldMapping(fields.subcategory, row) as any) ?? product.subcategory ?? null;
         product.finalCategory = (applyFieldMapping(fields.final_category, row) as any) ?? product.finalCategory ?? null;
         product.weight = (applyFieldMapping(fields.weight, row) as any) ?? product.weight ?? null;

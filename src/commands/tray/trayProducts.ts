@@ -299,7 +299,9 @@ async function main() {
         entity.lengthCm = toNumericString(pickNumber(prod, "length") ?? pickString(prod, "length"));
         entity.width = toNumericString(pickNumber(prod, "width") ?? pickString(prod, "width"));
         entity.height = toNumericString(pickNumber(prod, "height") ?? pickString(prod, "height"));
-        entity.externalCategoryId = pickNumber(prod, "category_id");
+        const externalCatId = pickNumber(prod, "category_id") ?? pickString(prod, "category_id");
+        entity.externalCategoryId =
+          externalCatId == null || String(externalCatId).trim() === "" ? null : String(externalCatId).trim();
         entity.photo = photoHttps;
         entity.url = pickString(urlObj, "https") ?? pickString(urlObj, "http");
         entity.raw = prod as unknown;

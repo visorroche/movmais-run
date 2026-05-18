@@ -9,6 +9,7 @@ import { Category } from "./Category.js";
 @Entity({ name: "products" })
 @Unique("UQ_products_company_id_sku", ["company", "sku"])
 @Index("idx_products_company_category", ["company", "categoryRef"])
+@Index("idx_products_company_external_id", ["company", "externalId"])
 export class Product {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -83,9 +84,9 @@ export class Product {
   @Column({ type: "varchar", nullable: true })
   category?: string | null;
 
-  /** ID da categoria na plataforma externa (AnyMarket etc. podem retornar ids > 2^31; usar bigint). */
-  @Column({ type: "bigint", nullable: true, name: "external_category_id" })
-  externalCategoryId?: number | null;
+  /** ID/código da categoria no ERP ou marketplace (formato varia por cliente). */
+  @Column({ type: "varchar", nullable: true, name: "external_category_id" })
+  externalCategoryId?: string | null;
 
   /** Vínculo com categoria do nosso banco (tabela categories). */
   @ManyToOne(() => Category, { nullable: true, onDelete: "SET NULL" })

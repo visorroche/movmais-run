@@ -506,7 +506,7 @@ Tabelas e colunas disponíveis para consultas. Gerado a partir das entidades em 
 | lenght | numeric |
 | ncm | varchar |
 | category | varchar |
-| external_category_id | bigint |
+| external_category_id | varchar |
 | category_id | fk |
 | subcategory | varchar |
 | final_category | varchar |
