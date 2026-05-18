@@ -180,6 +180,14 @@ export class Order {
   @JoinColumn({ name: "supervisor_id" })
   supervisor?: Representative | null;
 
+  /** Comissão % do assistente no pedido (quando a comissão é por pedido, não por item). */
+  @Column({ type: "numeric", precision: 14, scale: 6, default: 0, name: "assistant_comission" })
+  assistantComission!: string;
+
+  /** Comissão % do supervisor no pedido (quando a comissão é por pedido, não por item). */
+  @Column({ type: "numeric", precision: 14, scale: 6, default: 0, name: "supervisor_comission" })
+  supervisorComission!: string;
+
   @OneToMany(() => OrderItem, (item: OrderItem) => item.order)
   items?: OrderItem[];
 }

@@ -21,6 +21,7 @@ import {
   updateDatabaseB2bLastProcessedAt,
   describeDatabaseB2bConfig,
   collectSourceColumnsFromMapping,
+  joinOrderAndItemRows,
 } from "../../utils/databaseB2b.js";
 
 function toIntLoose(v: unknown): number | null {
@@ -103,6 +104,32 @@ function toNumericStringFixed(v: unknown, scale: number): string | null {
   const p = 10 ** Math.max(0, Math.min(8, Math.trunc(scale)));
   const rounded = Math.round(n * p) / p;
   return rounded.toFixed(scale);
+}
+
+function applyOrderLevelCommissions(order: Order, orderFields: Record<string, unknown>, row: Record<string, any>) {
+  if (schemaFieldName((orderFields as any).assistant_comission)) {
+    order.assistantComission =
+      toNumericStringFixed(applyFieldMapping((orderFields as any).assistant_comission, row), 6) ?? "0";
+  }
+  if (schemaFieldName((orderFields as any).supervisor_comission)) {
+    order.supervisorComission =
+      toNumericStringFixed(applyFieldMapping((orderFields as any).supervisor_comission, row), 6) ?? "0";
+  }
+}
+
+function resolveItemCommission(
+  itemFields: Record<string, unknown>,
+  orderFields: Record<string, unknown>,
+  key: "assistant_comission" | "supervisor_comission",
+  row: Record<string, any>,
+): string {
+  if (schemaFieldName((itemFields as any)[key])) {
+    return String(applyFieldMapping((itemFields as any)[key], row) ?? "0");
+  }
+  if (schemaFieldName((orderFields as any)[key])) {
+    return String(applyFieldMapping((orderFields as any)[key], row) ?? "0");
+  }
+  return "0";
 }
 
 function parseDateOnlyLoose(value: unknown): string | null {
@@ -220,12 +247,22 @@ async function main() {
   const meta = await loadDatabaseB2bCompanyPlatform(args.company);
   const cfg = meta?.config ?? null;
   if (!cfg) throw new Error("Config databaseB2b inválida: company_platforms.config ausente/ilegível.");
-  if (!cfg?.orders_schema?.table) {
+  const ordersSchemaEarly = cfg?.orders_schema;
+  const splitTablesEarly = ordersSchemaEarly?.singleTable === false;
+  const hasSingleTableSource = Boolean(String(ordersSchemaEarly?.table ?? "").trim());
+  const hasSplitTableSource =
+    Boolean(String(ordersSchemaEarly?.orderTable ?? "").trim()) &&
+    Boolean(String(ordersSchemaEarly?.orderItemTable ?? "").trim());
+  if (!ordersSchemaEarly || (splitTablesEarly ? !hasSplitTableSource : !hasSingleTableSource)) {
     console.error(
       `[databaseB2b:orders] diagnóstico config: company=${args.company} platform=${meta?.platformSlug ?? "?"} company_platform_id=${meta?.companyPlatformId ?? "?"}`,
     );
     console.error("[databaseB2b:orders] resumo:", describeDatabaseB2bConfig(cfg));
-    throw new Error("Config databaseB2b inválida: orders_schema.table ausente (configure o schema de pedidos).");
+    throw new Error(
+      splitTablesEarly
+        ? "Config databaseB2b inválida: orders_schema.orderTable e orderItemTable ausentes (modo duas tabelas)."
+        : "Config databaseB2b inválida: orders_schema.table ausente (configure o schema de pedidos).",
+    );
   }
 
   const companyRepo = AppDataSource.getRepository(Company);
@@ -245,11 +282,14 @@ async function main() {
     null;
 
   __stage = "prepare_schema";
-  const schema = cfg.orders_schema;
+  const schema = cfg.orders_schema!;
   const orderFields = schema.orderFields ?? {};
   const itemFields = schema.orderItemFields ?? {};
 
-  const table = schema.table;
+  const splitTables = schema.singleTable === false;
+  const table = splitTables
+    ? `${String(schema.orderTable ?? "").trim()}+${String(schema.orderItemTable ?? "").trim()}`
+    : String(schema.table ?? "").trim();
 
   let integrationLogId: number | null = null;
   try {
@@ -283,20 +323,28 @@ async function main() {
   } catch (e) {
     console.warn("[databaseB2b:orders] falha ao gravar log inicial (PROCESSANDO):", e);
   }
-  const singleTable = Boolean(schema.singleTable);
+  const singleTable = !splitTables;
   const syncedAtCol = schemaFieldName((orderFields as any).synced_at) || schemaFieldName((itemFields as any).synced_at) || "";
   const syncedAtMapping: any = (orderFields as any).synced_at ?? (itemFields as any).synced_at;
   const orderExternalIdCol = schemaFieldName((orderFields as any).external_id);
   const requiredOrderExternalId = schemaFieldName((orderFields as any).external_id).trim();
   const requiredItemExternalId = schemaFieldName((itemFields as any).external_id).trim();
+  const requiredItemOrderRef = schemaFieldName((itemFields as any).order_id).trim();
   if (!requiredOrderExternalId) throw new Error('Config databaseB2b inválida: orders_schema.orderFields.external_id ausente (mapeie "external_id").');
   if (!requiredItemExternalId) throw new Error('Config databaseB2b inválida: orders_schema.orderItemFields.external_id ausente (mapeie "external_id" nos itens).');
+  if (splitTables && !requiredItemOrderRef) {
+    throw new Error(
+      'Config databaseB2b inválida: orders_schema.orderItemFields.order_id ausente (mapeie a coluna do ERP que referencia o pedido — mesmo valor que external_id do cabeçalho).',
+    );
+  }
 
   const sourceCols = collectSourceColumnsFromMapping(orderFields as any);
-  collectSourceColumnsFromMapping(itemFields as any, sourceCols);
+  if (singleTable) collectSourceColumnsFromMapping(itemFields as any, sourceCols);
   sourceCols.add(requiredOrderExternalId);
-  sourceCols.add(requiredItemExternalId);
-  if (syncedAtCol) sourceCols.add(syncedAtCol);
+  if (singleTable) {
+    sourceCols.add(requiredItemExternalId);
+    if (syncedAtCol) sourceCols.add(syncedAtCol);
+  }
 
   const orderDateCol = schemaFieldName(orderFields.order_date);
   const whereParts: string[] = [];
@@ -369,34 +417,10 @@ async function main() {
     __stage = "fetch_external";
     let expectedRowCount: number | null = null;
     let expectedDistinctOrderCode: number | null = null;
-    try {
-      const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`, params);
-      const cRaw = (resCount.rows ?? [])?.[0]?.c;
-      const n = Number(cRaw);
-      if (Number.isFinite(n) && n >= 0) expectedRowCount = n;
-      console.log(`[databaseB2b:orders] fetch COUNT(*) no cliente (mesmo WHERE): ${expectedRowCount ?? "erro"}`);
-      if (orderCodeCol && expectedRowCount != null) {
-        try {
-          const resDistinct = await externalQuery(
-            `SELECT COUNT(DISTINCT ${quoteIdent(orderCodeCol)})::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`,
-            params,
-          );
-          const dRaw = (resDistinct.rows ?? [])?.[0]?.c;
-          const d = Number(dRaw);
-          if (Number.isFinite(d) && d >= 0) expectedDistinctOrderCode = d;
-          console.log(`[databaseB2b:orders] fetch COUNT(DISTINCT ${orderCodeCol}) no cliente: ${expectedDistinctOrderCode ?? "erro"}`);
-        } catch {
-          // ignora se coluna não existir ou falhar
-        }
-      }
-    } catch {
-      expectedRowCount = null;
-    }
-
     const BATCH_SIZE = 5000;
     let fetched = 0;
     let lastFetchLogAt = 0;
-    const logFetch = () => {
+    const logFetch = (label = "rows") => {
       const now = Date.now();
       if (now - lastFetchLogAt < 1500) return;
       lastFetchLogAt = now;
@@ -404,24 +428,114 @@ async function main() {
       const pctTxt = pct == null ? "" : ` (${pct}%)`;
       const elapsed = Math.round((now - startedAt) / 1000);
       console.log(
-        `[databaseB2b:orders] fetch rows=${fetched}${expectedRowCount != null ? `/${expectedRowCount}` : ""}${pctTxt} elapsed=${elapsed}s`,
+        `[databaseB2b:orders] fetch ${label}=${fetched}${expectedRowCount != null ? `/${expectedRowCount}` : ""}${pctTxt} elapsed=${elapsed}s`,
       );
     };
 
-    // ORDER BY garante ordem determinística: sem isso LIMIT/OFFSET podem retornar conjuntos diferentes entre batches e perder linhas.
-    const orderByCol = requiredItemExternalId || orderCodeCol || "1";
-    const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${dateWhereSql} ORDER BY ${quoteIdent(orderByCol)}`;
-    // Query exata para reproduzir no banco do cliente (substitua $1, $2, ... pelos params abaixo)
-    console.log("[databaseB2b:orders] query fetch:", sqlBase);
-    console.log("[databaseB2b:orders] params:", JSON.stringify(params));
-    for (let offset = 0; ; offset += BATCH_SIZE) {
-      // eslint-disable-next-line no-await-in-loop
-      const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, params);
-      const batch = (res.rows ?? []) as Record<string, any>[];
-      rows.push(...batch);
-      fetched += batch.length;
+    const fetchPaginated = async (sqlBase: string, queryParams: any[]) => {
+      const acc: Record<string, any>[] = [];
+      for (let offset = 0; ; offset += BATCH_SIZE) {
+        // eslint-disable-next-line no-await-in-loop
+        const res = await externalQuery(`${sqlBase} LIMIT ${BATCH_SIZE} OFFSET ${offset}`, queryParams);
+        const batch = (res.rows ?? []) as Record<string, any>[];
+        acc.push(...batch);
+        if (batch.length < BATCH_SIZE) break;
+      }
+      return acc;
+    };
+
+    if (splitTables) {
+      const orderTable = String(schema.orderTable ?? "").trim();
+      const orderItemTable = String(schema.orderItemTable ?? "").trim();
+
+      try {
+        const resCount = await externalQuery(
+          `SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(orderTable)}${dateWhereSql}`,
+          params,
+        );
+        const n = Number((resCount.rows ?? [])?.[0]?.c);
+        if (Number.isFinite(n) && n >= 0) expectedRowCount = n;
+        console.log(`[databaseB2b:orders] fetch COUNT(*) pedidos no cliente: ${expectedRowCount ?? "erro"}`);
+      } catch {
+        expectedRowCount = null;
+      }
+
+      const orderSourceCols = collectSourceColumnsFromMapping(orderFields as any);
+      orderSourceCols.add(requiredOrderExternalId);
+      if (orderDateCol) orderSourceCols.add(orderDateCol);
+      if (orderCodeCol) orderSourceCols.add(orderCodeCol);
+      const orderSyncedOnly = schemaFieldName((orderFields as any).synced_at);
+      if (orderSyncedOnly) orderSourceCols.add(orderSyncedOnly);
+
+      const itemSourceCols = collectSourceColumnsFromMapping(itemFields as any);
+      itemSourceCols.add(requiredItemExternalId);
+      itemSourceCols.add(requiredItemOrderRef);
+
+      const orderColsSql = orderSourceCols.size ? Array.from(orderSourceCols).map(quoteIdent).join(", ") : "*";
+      const itemColsSql = itemSourceCols.size ? Array.from(itemSourceCols).map(quoteIdent).join(", ") : "*";
+      const orderByOrder = requiredOrderExternalId || orderCodeCol || "1";
+      const sqlOrders = `SELECT ${orderColsSql} FROM ${quoteIdent(orderTable)}${dateWhereSql} ORDER BY ${quoteIdent(orderByOrder)}`;
+      console.log("[databaseB2b:orders] query fetch pedidos:", sqlOrders);
+      console.log("[databaseB2b:orders] params:", JSON.stringify(params));
+
+      const orderRows = await fetchPaginated(sqlOrders, params);
+      fetched = orderRows.length;
+      logFetch("order_rows");
+
+      const parentKeys = new Set<string>();
+      for (const row of orderRows) {
+        const ext = String(applyFieldMapping((orderFields as any).external_id, row) ?? "").trim();
+        if (ext) parentKeys.add(ext);
+      }
+
+      const itemRows: Record<string, any>[] = [];
+      const keys = Array.from(parentKeys);
+      console.log(`[databaseB2b:orders] buscando itens para ${keys.length} pedido(s) em ${orderItemTable}…`);
+      for (const ids of chunk(keys, 500)) {
+        if (!ids.length) continue;
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+        const sqlItems = `SELECT ${itemColsSql} FROM ${quoteIdent(orderItemTable)} WHERE ${quoteIdent(requiredItemOrderRef)} IN (${placeholders}) ORDER BY ${quoteIdent(requiredItemExternalId)}`;
+        // eslint-disable-next-line no-await-in-loop
+        const batchItems = await fetchPaginated(sqlItems, ids);
+        itemRows.push(...batchItems);
+      }
+      console.log(`[databaseB2b:orders] itens lidos do cliente: ${itemRows.length}`);
+
+      rows = joinOrderAndItemRows(schema, orderRows, itemRows);
+      fetched = rows.length;
+      logFetch("merged_rows");
+    } else {
+      try {
+        const resCount = await externalQuery(`SELECT COUNT(*)::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`, params);
+        const cRaw = (resCount.rows ?? [])?.[0]?.c;
+        const n = Number(cRaw);
+        if (Number.isFinite(n) && n >= 0) expectedRowCount = n;
+        console.log(`[databaseB2b:orders] fetch COUNT(*) no cliente (mesmo WHERE): ${expectedRowCount ?? "erro"}`);
+        if (orderCodeCol && expectedRowCount != null) {
+          try {
+            const resDistinct = await externalQuery(
+              `SELECT COUNT(DISTINCT ${quoteIdent(orderCodeCol)})::bigint AS c FROM ${quoteIdent(table)}${dateWhereSql}`,
+              params,
+            );
+            const dRaw = (resDistinct.rows ?? [])?.[0]?.c;
+            const d = Number(dRaw);
+            if (Number.isFinite(d) && d >= 0) expectedDistinctOrderCode = d;
+            console.log(`[databaseB2b:orders] fetch COUNT(DISTINCT ${orderCodeCol}) no cliente: ${expectedDistinctOrderCode ?? "erro"}`);
+          } catch {
+            // ignora se coluna não existir ou falhar
+          }
+        }
+      } catch {
+        expectedRowCount = null;
+      }
+
+      const orderByCol = requiredItemExternalId || orderCodeCol || "1";
+      const sqlBase = `SELECT ${colsSql} FROM ${quoteIdent(table)}${dateWhereSql} ORDER BY ${quoteIdent(orderByCol)}`;
+      console.log("[databaseB2b:orders] query fetch:", sqlBase);
+      console.log("[databaseB2b:orders] params:", JSON.stringify(params));
+      rows = await fetchPaginated(sqlBase, params);
+      fetched = rows.length;
       logFetch();
-      if (batch.length < BATCH_SIZE) break;
     }
 
     __stage = "group_rows";
@@ -1046,6 +1160,7 @@ async function main() {
         order.deliveryAddress = (applyFieldMapping(orderFields.delivery_address, first) as any) ?? null;
         order.deliveryComplement = (applyFieldMapping(orderFields.delivery_complement, first) as any) ?? null;
         if (!singleTable) order.metadata = (applyFieldMapping(orderFields.metadata, first) as any) ?? null;
+        applyOrderLevelCommissions(order, orderFields as any, first);
         const customerKey = String(applyFieldMapping(orderFields.customer_id, first) ?? "").trim();
         if (customerKey) {
           const c = customersByLookup.get(customerKey);
@@ -1101,8 +1216,8 @@ async function main() {
           item.itemType = hasItemTypeMapping ? ((applyFieldMapping(itemFields.item_type, row) as any) ?? null) : "produto";
           item.serviceRefSku = (applyFieldMapping(itemFields.service_ref_sku, row) as any) ?? null;
           item.comission = (applyFieldMapping(itemFields.comission, row) as any) ?? "0";
-          item.assistantComission = (applyFieldMapping(itemFields.assistant_comission, row) as any) ?? "0";
-          item.supervisorComission = (applyFieldMapping(itemFields.supervisor_comission, row) as any) ?? "0";
+          item.assistantComission = resolveItemCommission(itemFields as any, orderFields as any, "assistant_comission", row);
+          item.supervisorComission = resolveItemCommission(itemFields as any, orderFields as any, "supervisor_comission", row);
           item.metadata = (applyFieldMapping(itemFields.metadata, row) as any) ?? null;
           const rowItemSyncedAt = syncedAtMapping ? parseTimestamp(applyFieldMapping(syncedAtMapping, row)) : null;
           item.sourceSyncedAt = rowItemSyncedAt ?? null;
@@ -1237,6 +1352,7 @@ async function main() {
 
       // metadata só quando NÃO for tabela única (no modo singleTable, metadata fica apenas nos itens)
       if (!singleTable) order.metadata = (applyFieldMapping(orderFields.metadata, first) as any) ?? order.metadata ?? null;
+      applyOrderLevelCommissions(order, orderFields as any, first);
 
       const customerKey = String(applyFieldMapping(orderFields.customer_id, first) ?? "").trim();
       if (customerKey) {
@@ -1332,8 +1448,8 @@ async function main() {
         item.itemType = hasItemTypeMapping ? ((applyFieldMapping(itemFields.item_type, row) as any) ?? null) : "produto";
         item.serviceRefSku = (applyFieldMapping(itemFields.service_ref_sku, row) as any) ?? null;
         item.comission = (applyFieldMapping(itemFields.comission, row) as any) ?? "0";
-        item.assistantComission = (applyFieldMapping(itemFields.assistant_comission, row) as any) ?? "0";
-        item.supervisorComission = (applyFieldMapping(itemFields.supervisor_comission, row) as any) ?? "0";
+        item.assistantComission = resolveItemCommission(itemFields as any, orderFields as any, "assistant_comission", row);
+        item.supervisorComission = resolveItemCommission(itemFields as any, orderFields as any, "supervisor_comission", row);
         item.metadata = (applyFieldMapping(itemFields.metadata, row) as any) ?? null;
         item.sourceSyncedAt = rowItemSyncedAt ?? null;
         itemsToSaveByExternalId.set(itemExternalId, item);

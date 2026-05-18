@@ -644,3 +644,59 @@ export async function queryExternalBatched<T extends Record<string, any>>(client
   return out;
 }
 
+/**
+ * Modo duas tabelas: une cabeçalho do pedido + linha de item pelo `orderItemFields.order_id`
+ * (coluna no ERP) → `orderFields.external_id` (id do pedido no ERP).
+ */
+export function joinOrderAndItemRows(
+  schema: DatabaseB2bOrdersSchema,
+  orderRows: Record<string, any>[],
+  itemRows: Record<string, any>[],
+): Record<string, any>[] {
+  const orderFields = schema.orderFields ?? {};
+  const itemFields = schema.orderItemFields ?? {};
+
+  const orderExtCol = schemaFieldName((orderFields as any).external_id);
+  const itemOrderRefCol = schemaFieldName((itemFields as any).order_id);
+  if (!orderExtCol) {
+    throw new Error('orders_schema: mapeie orderFields.external_id para unir pedidos e itens.');
+  }
+  if (!itemOrderRefCol) {
+    throw new Error(
+      'orders_schema: mapeie orderItemFields.order_id (coluna no ERP que referencia o pedido) para o modo duas tabelas.',
+    );
+  }
+
+  const ordersByExt = new Map<string, Record<string, any>>();
+  for (const row of orderRows) {
+    const ext = String(row[orderExtCol] ?? applyFieldMapping((orderFields as any).external_id, row) ?? "").trim();
+    if (!ext) continue;
+    if (!ordersByExt.has(ext)) ordersByExt.set(ext, row);
+  }
+
+  const merged: Record<string, any>[] = [];
+  let skippedNoParent = 0;
+  for (const itemRow of itemRows) {
+    const parentKey = String(
+      itemRow[itemOrderRefCol] ?? applyFieldMapping((itemFields as any).order_id, itemRow) ?? "",
+    ).trim();
+    if (!parentKey) continue;
+    const orderRow = ordersByExt.get(parentKey);
+    if (!orderRow) {
+      skippedNoParent++;
+      continue;
+    }
+    merged.push({ ...orderRow, ...itemRow });
+  }
+
+  if (merged.length === 0 && itemRows.length > 0) {
+    throw new Error(
+      `Nenhum item encontrou pedido correspondente via orderItemFields.order_id → orderFields.external_id (${skippedNoParent} itens sem pai). Confira o mapeamento das duas tabelas.`,
+    );
+  }
+  if (skippedNoParent > 0) {
+    console.warn(`[databaseB2b:orders] ${skippedNoParent} item(ns) sem pedido pai correspondente (ignorados).`);
+  }
+  return merged;
+}
+
