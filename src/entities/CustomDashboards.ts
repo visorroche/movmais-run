@@ -68,6 +68,10 @@ export class CustomDashboards {
   @Column({ type: "jsonb" })
   layout!: unknown;
 
+  /** Vincula card id -> goal id (meta cadastrada), ex.: { "kpi_revenue": 12 }. */
+  @Column({ type: "jsonb", nullable: true })
+  goals!: unknown | null;
+
   @CreateDateColumn({ type: "timestamptz", default: () => "now()", name: "created_at" })
   createdAt!: Date;
 
