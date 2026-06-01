@@ -14,6 +14,8 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 | Products | Tray | `tray:products` | **a cada 3 horas** | Roda na inicialização (após ~10s). |
 | Products | AnyMarket | `anymarket:products` | **a cada 3 horas** | Roda na inicialização (após ~12s). Config: `{"token":"..."}` |
 | Database B2B | Database | `databaseB2b:*` | **a cada 1 hora** | Roda na inicialização. Usa config em `company_platforms.config`. |
+| iClinic token | iClinic | `iclinic:getToken` | **todo dia 01:00** (America/Sao_Paulo) | Playwright: login com email/senha da config; grava `token` + `cookies` em `company_platforms.config`. |
+| iClinic agenda | iClinic | `iclinic:getBookings` | **todo dia 01:10** (America/Sao_Paulo) | Agenda do **dia anterior** por `representatives.external_id` (= agenda_id). |
 
 ### Variáveis de ambiente (mensagens recorrentes)
 
@@ -30,6 +32,25 @@ npm run script:recurrent-messages:tick
 ## Comandos para rodar manualmente
 
 Obs.: para passar parâmetros (`--company`, `--start-date`, etc) via `npm run`, use `--` antes.
+
+### iClinic (SaaS)
+
+Config em `company_platforms.config` (slug `iclinic`): `email`, `password`, `token` (preenchido pelo getToken), `cookies`, `clinic_id` (opcional).
+
+**Agendas (médicos):** cadastre em `representatives` com `external_id` = `agenda_id` do iClinic (ex. `261948` em `doctors.json`) e `active = true`. Pacientes da API viram `customers` com `segmentation = iclinic_patient` e `representative_id`: se a consulta for com agenda principal (`261948` Ornela ou `267595` Maria Baracat), o vínculo fica fixo; senão, atualiza para o último médico que atendeu. Pedidos vinculam `customer` (paciente) e `representative` (médico da agenda do evento).
+
+```bash
+cd script-bi
+npm install   # inclui playwright (npx playwright install chromium na primeira vez)
+npm run script:iclinic:getToken -- --company=1
+npm run script:iclinic:getBookings -- --company=1
+# um dia (senão usa ontem em America/Sao_Paulo)
+npm run script:iclinic:getBookings -- --company=1 --date=2026-05-19
+# intervalo: busca dia a dia por agenda; logs mostram progresso até concluir
+npm run script:iclinic:getBookings -- --company=1 --start-date=2026-05-01 --end-date=2026-05-19
+```
+
+Variáveis opcionais: `ICLINIC_HEADLESS=false`, `DEBUG_ICLINIC=true`, `ICLINIC_CLINIC_ID`.
 
 ### Mensagens recorrentes (tick na API)
 

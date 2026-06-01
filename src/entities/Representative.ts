@@ -90,5 +90,8 @@ export class Representative {
 
   @Column({ type: "text", nullable: true })
   obs?: string | null;
+
+  @Column({ type: "jsonb", nullable: true })
+  metadata?: Record<string, unknown> | null;
 }
 
