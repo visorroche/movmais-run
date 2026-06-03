@@ -52,12 +52,25 @@ async function parseJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
+export const ICLINIC_SESSION_EXPIRED_CODE = "ICLINIC_SESSION_EXPIRED";
+
+export function iclinicSessionExpiredError(message = "Sessão iClinic expirada."): Error {
+  const err = new Error(message);
+  (err as { code?: string }).code = ICLINIC_SESSION_EXPIRED_CODE;
+  return err;
+}
+
+export function isIclinicSessionExpiredError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  if ((err as { code?: string }).code === ICLINIC_SESSION_EXPIRED_CODE) return true;
+  const msg = String((err as Error).message ?? err);
+  return /sess[aã]o iclinic expirada|iclinic_session_expired/i.test(msg);
+}
+
 function assertAppSession(data: unknown): void {
   const d = data as { redirect?: string } | null;
   if (d?.redirect && /login/i.test(String(d.redirect))) {
-    const err = new Error("Sessão iClinic expirada. Execute iclinic:getToken.");
-    (err as { code?: string }).code = "ICLINIC_SESSION_EXPIRED";
-    throw err;
+    throw iclinicSessionExpiredError("Sessão iClinic expirada. Execute iclinic:getToken.");
   }
 }
 

@@ -1,6 +1,7 @@
 import { AppDataSource } from "../data-source.js";
 import { CompanyPlataform } from "../../entities/CompanyPlataform.js";
 import type { IclinicCompanyConfig, IclinicSession } from "./types.js";
+import { extractIclinicTokenWithPlaywright, mergeTokenIntoConfig } from "./get-token-playwright.js";
 
 const ICLINIC_SLUGS = ["iclinic"] as const;
 
@@ -73,6 +74,29 @@ export async function saveIclinicConfig(
   companyPlatform.config = next;
   await repo.save(companyPlatform);
   return next;
+}
+
+/** Login Playwright + persistência em `company_platforms.config`. Usado por getToken e getBookings. */
+export async function refreshIclinicTokenForCompany(companyId: number): Promise<{
+  config: IclinicCompanyConfig;
+  session: IclinicSession;
+}> {
+  const loaded = await loadIclinicCompanyPlatform(companyId);
+  if (!loaded) {
+    throw new Error(`Plataforma iclinic não configurada para company=${companyId}.`);
+  }
+
+  const email = String(loaded.config.email ?? "").trim();
+  const password = String(loaded.config.password ?? "").trim();
+  if (!email || !password) {
+    throw new Error("Config iclinic precisa de email e password para renovar o token.");
+  }
+
+  const extracted = await extractIclinicTokenWithPlaywright(email, password);
+  const nextConfig = mergeTokenIntoConfig(loaded.config, extracted);
+  await saveIclinicConfig(loaded.companyPlatform, nextConfig);
+
+  return { config: nextConfig, session: sessionFromConfig(nextConfig) };
 }
 
 export { ICLINIC_SLUGS };

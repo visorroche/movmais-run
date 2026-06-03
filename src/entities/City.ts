@@ -17,4 +17,10 @@ export class City {
 
   @Column({ type: "text", nullable: true })
   city?: string | null;
+
+  @Column({ name: "zip_start", type: "text", nullable: true })
+  zipStart?: string | null;
+
+  @Column({ name: "zip_end", type: "text", nullable: true })
+  zipEnd?: string | null;
 }

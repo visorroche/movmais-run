@@ -11,8 +11,13 @@ import { Order } from "../../entities/Order.js";
 import { OrderItem } from "../../entities/OrderItem.js";
 import { Plataform } from "../../entities/Plataform.js";
 import { IntegrationLog } from "../../entities/IntegrationLog.js";
-import { loadIclinicCompanyPlatform, sessionFromConfig } from "../../utils/iclinic/config.js";
-import { fetchAgendaFormatted } from "../../utils/iclinic/client.js";
+import {
+  loadIclinicCompanyPlatform,
+  refreshIclinicTokenForCompany,
+  sessionFromConfig,
+} from "../../utils/iclinic/config.js";
+import { fetchAgendaFormatted, isIclinicSessionExpiredError } from "../../utils/iclinic/client.js";
+import type { IclinicSession } from "../../utils/iclinic/types.js";
 import {
   yesterdayYmdBrazil,
   parseOrderDateTime,
@@ -237,7 +242,7 @@ async function upsertProcedureProduct(
 async function processAgendaDay(
   company: Company,
   platform: Plataform | null,
-  session: ReturnType<typeof sessionFromConfig>,
+  session: IclinicSession,
   dateYmd: string,
   agendaRepresentative: Representative,
   patientCache: Map<string, Customer>,
@@ -295,6 +300,92 @@ async function processAgendaDay(
   );
 }
 
+type AgendaDayContext = {
+  company: Company;
+  platform: Plataform | null;
+  dateYmd: string;
+  agendaRepresentative: Representative;
+  patientCache: Map<string, Customer>;
+  productCache: Map<string, Product>;
+  orderRepo: ReturnType<typeof AppDataSource.getRepository<Order>>;
+  itemRepo: ReturnType<typeof AppDataSource.getRepository<OrderItem>>;
+  counters: {
+    agendasProcessed: number;
+    eventsProcessed: number;
+    ordersInserted: number;
+    ordersUpdated: number;
+    itemsSaved: number;
+    errors: string[];
+  };
+};
+
+/**
+ * Executa uma agenda; se a sessão expirar, renova o token (1× por execução do comando) e repete.
+ * Falha fatal interrompe o restante do backfill (não segue agenda/dia seguinte).
+ */
+async function processAgendaDayResilient(
+  companyId: number,
+  sessionRef: { current: IclinicSession },
+  tokenRefreshedThisRun: { done: boolean },
+  abortRun: { value: boolean },
+  ctx: AgendaDayContext,
+): Promise<void> {
+  const runOnce = () =>
+    processAgendaDay(
+      ctx.company,
+      ctx.platform,
+      sessionRef.current,
+      ctx.dateYmd,
+      ctx.agendaRepresentative,
+      ctx.patientCache,
+      ctx.productCache,
+      ctx.orderRepo,
+      ctx.itemRepo,
+      ctx.counters,
+    );
+
+  try {
+    await runOnce();
+    return;
+  } catch (firstErr: unknown) {
+    if (!isIclinicSessionExpiredError(firstErr)) throw firstErr;
+
+    if (tokenRefreshedThisRun.done) {
+      abortRun.value = true;
+      throw new Error(
+        `Sessão iClinic ainda inválida após renovar o token. Execução interrompida. (${String((firstErr as Error)?.message ?? firstErr)})`,
+      );
+    }
+
+    console.warn("[iclinic:getBookings] sessão expirada; renovando token automaticamente (Playwright)...");
+    try {
+      const refreshed = await refreshIclinicTokenForCompany(companyId);
+      sessionRef.current = refreshed.session;
+      tokenRefreshedThisRun.done = true;
+      console.log(
+        `[iclinic:getBookings] token renovado (clinic_id=${refreshed.config.clinic_id ?? "?"}, cookies=${refreshed.config.cookies?.length ?? 0}); repetindo agenda...`,
+      );
+    } catch (refreshErr: unknown) {
+      abortRun.value = true;
+      throw new Error(
+        `Não foi possível renovar o token iClinic: ${String((refreshErr as Error)?.message ?? refreshErr)}`,
+      );
+    }
+
+    try {
+      await runOnce();
+    } catch (retryErr: unknown) {
+      if (isIclinicSessionExpiredError(retryErr)) {
+        abortRun.value = true;
+        throw new Error(
+          `Sessão iClinic ainda inválida após renovar o token. Execução interrompida. (${String((retryErr as Error)?.message ?? retryErr)})`,
+        );
+      }
+      throw retryErr;
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const startedAt = Date.now();
   const { companyId, dates } = parseBookingArgs(process.argv.slice(2));
@@ -306,7 +397,9 @@ async function main(): Promise<void> {
   const loaded = await loadIclinicCompanyPlatform(companyId);
   if (!loaded) throw new Error(`Plataforma iclinic não configurada para company=${companyId}.`);
 
-  const session = sessionFromConfig(loaded.config);
+  const sessionRef = { current: sessionFromConfig(loaded.config) };
+  const tokenRefreshedThisRun = { done: false };
+  const abortRun = { value: false };
 
   const company = await AppDataSource.getRepository(Company).findOne({ where: { id: companyId } });
   if (!company) throw new Error(`Company ${companyId} não encontrada.`);
@@ -369,7 +462,19 @@ async function main(): Promise<void> {
     `[iclinic:getBookings] company=${companyId} periodo=${period} representantes_agenda=${agendaRepresentatives.length} passos=${totalSteps} (sem --date/--start-date usa ontem em America/Sao_Paulo)`,
   );
 
+  const agendaCtxBase = {
+    company,
+    platform,
+    patientCache,
+    productCache,
+    orderRepo,
+    itemRepo,
+    counters,
+  };
+
   for (let dayIndex = 0; dayIndex < dates.length; dayIndex++) {
+    if (abortRun.value) break;
+
     const dateYmd = dates[dayIndex]!;
     let dayEvents = 0;
     let dayAgendasOk = 0;
@@ -380,6 +485,8 @@ async function main(): Promise<void> {
     );
 
     for (const agendaRepresentative of agendaRepresentatives) {
+      if (abortRun.value) break;
+
       step += 1;
       const agendaId = String(agendaRepresentative.externalId ?? "").trim();
       if (!agendaId) continue;
@@ -392,27 +499,23 @@ async function main(): Promise<void> {
       const eventsBefore = counters.eventsProcessed;
 
       try {
-        await processAgendaDay(
-          company,
-          platform,
-          session,
+        await processAgendaDayResilient(companyId, sessionRef, tokenRefreshedThisRun, abortRun, {
+          ...agendaCtxBase,
           dateYmd,
           agendaRepresentative,
-          patientCache,
-          productCache,
-          orderRepo,
-          itemRepo,
-          counters,
-        );
+        });
         dayAgendasOk += 1;
         dayEvents += counters.eventsProcessed - eventsBefore;
       } catch (e: unknown) {
-        counters.errors.push(
-          `agenda ${agendaId} (${dateYmd}): ${String((e as Error)?.message ?? e)}`,
-        );
-        console.warn(
-          `[iclinic:getBookings]   erro agenda ${agendaId} data=${dateYmd}: ${String((e as Error)?.message ?? e)}`,
-        );
+        const msg = String((e as Error)?.message ?? e);
+        counters.errors.push(`agenda ${agendaId} (${dateYmd}): ${msg}`);
+        console.error(`[iclinic:getBookings]   erro agenda ${agendaId} data=${dateYmd}: ${msg}`);
+        if (abortRun.value) {
+          console.error(
+            "[iclinic:getBookings] execução interrompida: sessão iClinic inválida e renovação automática não resolveu.",
+          );
+          break;
+        }
       }
     }
 
@@ -420,6 +523,8 @@ async function main(): Promise<void> {
     console.log(
       `[iclinic:getBookings] dia ${dateYmd} finalizado agendas_ok=${dayAgendasOk}/${agendaRepresentatives.length} events=${dayEvents} erros_dia=${dayErrors} acumulado_events=${counters.eventsProcessed} acumulado_orders+${counters.ordersInserted}/~${counters.ordersUpdated}`,
     );
+
+    if (abortRun.value) break;
   }
 
   const { agendasProcessed, eventsProcessed, ordersInserted, ordersUpdated, itemsSaved, errors } = counters;
@@ -457,7 +562,7 @@ async function main(): Promise<void> {
     console.warn("[iclinic:getBookings] falha ao finalizar log:", e);
   }
 
-  if (errors.length) process.exitCode = 2;
+  if (errors.length || abortRun.value) process.exitCode = abortRun.value ? 1 : 2;
 }
 
 async function persistEvent(
