@@ -216,6 +216,7 @@ Tabelas e colunas disponíveis para consultas. Gerado a partir das entidades em 
 | phones | jsonb |
 | obs | text |
 | raw | jsonb |
+| metadata | jsonb |
 | representative_id | fk |
 | customer_group_id | fk |
 
@@ -387,6 +388,8 @@ Tabelas e colunas disponíveis para consultas. Gerado a partir das entidades em 
 | state | varchar |
 | freight_range | varchar |
 | deadline_bucket | varchar |
+| courier | varchar |
+| product_id | int |
 | total_simulations | int |
 | total_orders | int |
 | total_value_simulations | numeric |

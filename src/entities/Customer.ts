@@ -102,6 +102,9 @@ export class Customer {
   @Column({ type: "jsonb", nullable: true })
   raw?: unknown;
 
+  @Column({ type: "jsonb", nullable: true })
+  metadata?: Record<string, unknown> | null;
+
   /** Representante da carteira do cliente; vendas do cliente costumam ser lançadas nesse representante. */
   @ManyToOne(() => Representative, { nullable: true, onDelete: "SET NULL" })
   @JoinColumn({ name: "representative_id" })

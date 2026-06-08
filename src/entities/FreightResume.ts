@@ -5,17 +5,21 @@ import { Entity, PrimaryGeneratedColumn, Column, Index, Unique } from "typeorm";
  * Plataformas: logistic
  */
 @Entity({ name: "freight_resume" })
-@Unique("UQ_freight_resume_company_date_channel_state_freight_deadline", [
+@Unique("UQ_freight_resume_company_date_dims", [
   "companyId",
   "date",
   "channel",
   "state",
   "freightRange",
   "deadlineBucket",
+  "courier",
+  "productId",
 ])
 @Index("idx_freight_resume_company_date", ["companyId", "date"])
 @Index("idx_freight_resume_company_date_channel", ["companyId", "date", "channel"])
 @Index("idx_freight_resume_company_date_state", ["companyId", "date", "state"])
+@Index("idx_freight_resume_company_date_courier", ["companyId", "date", "courier"])
+@Index("idx_freight_resume_company_date_product", ["companyId", "date", "productId"])
 export class FreightResume {
   @PrimaryGeneratedColumn()
   id!: number;
@@ -41,6 +45,14 @@ export class FreightResume {
   /** Bucket de prazo; NULL quando não há opção de entrega disponível. */
   @Column({ type: "varchar", length: 16, nullable: true })
   deadlineBucket?: string | null;
+
+  /** Operador logístico / transportadora da melhor opção de frete (`freight_quote_options.carrier`). */
+  @Column({ type: "varchar", length: 255, default: "" })
+  courier!: string;
+
+  /** Produto na cotação (`freight_quotes_items.product_id`); NULL = cotação sem item vinculado. */
+  @Column({ type: "int", nullable: true, name: "product_id" })
+  productId?: number | null;
 
   // total de cotações
   @Column({ type: "int", default: 0 })

@@ -22,6 +22,7 @@ import {
   describeDatabaseB2bConfig,
   collectSourceColumnsFromMapping,
   joinOrderAndItemRows,
+  appendWhereClausesSql,
 } from "../../utils/databaseB2b.js";
 import {
   applyRepresentativeExternalIdLookup,
@@ -353,6 +354,9 @@ async function main() {
   const orderDateCol = schemaFieldName(orderFields.order_date);
   const whereParts: string[] = [];
   const params: any[] = [];
+  const orderWhereClauses = splitTables ? (schema as any).orderWhereClauses : (schema as any).whereClauses;
+  const orderItemWhereClauses = splitTables ? (schema as any).orderItemWhereClauses : [];
+  appendWhereClausesSql(whereParts, params, orderWhereClauses, quoteIdent);
   if (orderDateCol && args.startDate) {
     params.push(args.startDate);
     whereParts.push(`${quoteIdent(orderDateCol)} >= $${params.length}`);
@@ -498,9 +502,12 @@ async function main() {
       for (const ids of chunk(keys, 500)) {
         if (!ids.length) continue;
         const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
-        const sqlItems = `SELECT ${itemColsSql} FROM ${quoteIdent(orderItemTable)} WHERE ${quoteIdent(requiredItemOrderRef)} IN (${placeholders}) ORDER BY ${quoteIdent(requiredItemExternalId)}`;
+        const itemWhereParts: string[] = [`${quoteIdent(requiredItemOrderRef)} IN (${placeholders})`];
+        const itemParams: any[] = [...ids];
+        appendWhereClausesSql(itemWhereParts, itemParams, orderItemWhereClauses, quoteIdent);
+        const sqlItems = `SELECT ${itemColsSql} FROM ${quoteIdent(orderItemTable)} WHERE ${itemWhereParts.join(" AND ")} ORDER BY ${quoteIdent(requiredItemExternalId)}`;
         // eslint-disable-next-line no-await-in-loop
-        const batchItems = await fetchPaginated(sqlItems, ids);
+        const batchItems = await fetchPaginated(sqlItems, itemParams);
         itemRows.push(...batchItems);
       }
       console.log(`[databaseB2b:orders] itens lidos do cliente: ${itemRows.length}`);

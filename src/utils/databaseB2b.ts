@@ -19,6 +19,13 @@ export type SchemaFieldMappingValue =
       options?: Record<string, any>;
     };
 
+export type DatabaseB2bWhereOperator = "=" | "LIKE" | "<>" | ">=" | ">" | "<=" | "<";
+export type DatabaseB2bWhereClause = {
+  field: string;
+  operator?: DatabaseB2bWhereOperator;
+  value: string | number | boolean | null;
+};
+
 export type DatabaseB2bOrdersSchema = {
   singleTable: boolean;
   table: string;
@@ -26,6 +33,9 @@ export type DatabaseB2bOrdersSchema = {
   orderItemTable?: string;
   orderFields: Record<string, SchemaFieldMappingValue>;
   orderItemFields: Record<string, SchemaFieldMappingValue>;
+  whereClauses?: DatabaseB2bWhereClause[];
+  orderWhereClauses?: DatabaseB2bWhereClause[];
+  orderItemWhereClauses?: DatabaseB2bWhereClause[];
   /** ISO string (timestamptz) do último processamento bem-sucedido. */
   last_processed_at?: string;
 };
@@ -33,6 +43,7 @@ export type DatabaseB2bOrdersSchema = {
 export type DatabaseB2bSimpleSchema = {
   table: string;
   fields: Record<string, SchemaFieldMappingValue>;
+  whereClauses?: DatabaseB2bWhereClause[];
   /** ISO string (timestamptz) do último processamento bem-sucedido. */
   last_processed_at?: string;
 };
@@ -524,6 +535,59 @@ export function parseCsvColumns(value: string): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+export function normalizeWhereOperator(raw: unknown): DatabaseB2bWhereOperator {
+  const op = String(raw ?? "=").trim().toUpperCase();
+  if (op === "LIKE") return "LIKE";
+  if (op === "<>") return "<>";
+  if (op === ">=") return ">=";
+  if (op === ">") return ">";
+  if (op === "<=") return "<=";
+  if (op === "<") return "<";
+  return "=";
+}
+
+export function normalizeDatabaseB2bWhereClauses(raw: unknown): DatabaseB2bWhereClause[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DatabaseB2bWhereClause[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const field = String((row as any).field ?? "").trim();
+    if (!field) continue;
+    if ((row as any).value === undefined) continue;
+    const value = (row as any).value;
+    out.push({
+      field,
+      operator: normalizeWhereOperator((row as any).operator),
+      value: value === undefined ? null : (value as any),
+    });
+  }
+  return out;
+}
+
+export function appendWhereClausesSql(
+  whereParts: string[],
+  params: any[],
+  clausesRaw: unknown,
+  quoteIdentFn: (name: string) => string,
+): void {
+  const clauses = normalizeDatabaseB2bWhereClauses(clausesRaw);
+  for (const clause of clauses) {
+    const fieldSql = quoteIdentFn(String(clause.field));
+    const op = normalizeWhereOperator(clause.operator);
+    const value = clause.value;
+    if (value === null) {
+      if (op === "=") {
+        whereParts.push(`${fieldSql} IS NULL`);
+      } else if (op === "<>") {
+        whereParts.push(`${fieldSql} IS NOT NULL`);
+      }
+      continue;
+    }
+    params.push(value);
+    whereParts.push(`${fieldSql} ${op} $${params.length}`);
+  }
 }
 
 export function pickRowValue(row: Record<string, any>, col: string): any {

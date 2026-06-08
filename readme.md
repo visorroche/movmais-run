@@ -232,6 +232,25 @@ npm run script:databaseb2b:orders -- --company=1 --start-date=2026-02-01 --end-d
 ## Regras de Negócio Freight
 O campo invoice_value em FreightOrder e FreightQuote não soma o valor do frete são só os valores dos produtos
 
+`freight_resume` agrega por **channel, state, freight_range, deadline_bucket, courier** (melhor opção) e **product_id** (`freight_quotes_items`, sem join em `products`). Cotação com vários produtos gera uma linha por `product_id`; valores de NF e pedido são rateados entre os itens da mesma cotação.
+
+Após alterar a entidade, aplique no Postgres (ou `npm run script:sync-schema`):
+
+```sql
+ALTER TABLE freight_resume ADD COLUMN IF NOT EXISTS courier varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE freight_resume ADD COLUMN IF NOT EXISTS product_id int NULL;
+ALTER TABLE freight_resume DROP COLUMN IF EXISTS sku;
+```
+
+Reprocesse com `npm run script:resume:freight -- --start-date=... --end-date=...` (uma query por **company_id** e dia; várias companies do mesmo dia em **paralelo**).
+
+```bash
+npm run script:resume:freight -- --start-date=2026-01-01 --end-date=2026-02-28
+npm run script:resume:freight -- --company=28 --date=2026-01-02
+```
+
+Variáveis: `FREIGHT_RESUME_COMPANY_CONCURRENCY` (padrão **4**), `FREIGHT_RESUME_PAGE_SIZE` (padrão **2000** cotações por página), `FREIGHT_RESUME_STATEMENT_TIMEOUT_MS` (padrão 2 min por query). Agregação feita **em código** (paginação por company+dia); timeout em uma company não interrompe as demais.
+
 Em FreightQuote nós selecionamos o best_deadline e o best_freight_cost baseado na melhor FreightQuoteOption disponivel,
 a lógica para escolher a melhor opção é tentar ver se algum deles já tem o melhor preço e melhor deadline e se não tiver nenhuma opção
 criarmos um score que analiza o menor score baseado na formula:

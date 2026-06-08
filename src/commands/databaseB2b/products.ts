@@ -22,6 +22,7 @@ import {
   getDatabaseB2bLastProcessedAt,
   updateDatabaseB2bLastProcessedAt,
   describeDatabaseB2bConfig,
+  appendWhereClausesSql,
 } from "../../utils/databaseB2b.js";
 
 let __stage = "init";
@@ -274,6 +275,7 @@ async function main() {
   const colsSql = sourceCols.size ? Array.from(sourceCols).map(quoteIdent).join(", ") : "*";
   const whereParts: string[] = [];
   const params: any[] = [];
+  appendWhereClausesSql(whereParts, params, (schema as any).whereClauses, quoteIdent);
   if (!args.force && syncedAtCol && lastProcessedAt) {
     params.push(lastProcessedAt.toISOString());
     whereParts.push(`${quoteIdent(syncedAtCol)} > $${params.length}`);

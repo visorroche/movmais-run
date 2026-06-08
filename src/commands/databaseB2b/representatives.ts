@@ -19,6 +19,7 @@ import {
   parseTimestamp,
   describeDatabaseB2bConfig,
   collectSourceColumnsFromMapping,
+  appendWhereClausesSql,
 } from "../../utils/databaseB2b.js";
 import {
   applyRepresentativeExternalIdLookup,
@@ -172,6 +173,7 @@ async function main() {
   const colsSql = sourceCols.size ? Array.from(sourceCols).map(quoteIdent).join(", ") : "*";
   const whereParts: string[] = [];
   const params: any[] = [];
+  appendWhereClausesSql(whereParts, params, (schema as any).whereClauses, quoteIdent);
   if (!args.force && syncedAtCol && lastProcessedAt) {
     params.push(lastProcessedAt.toISOString());
     whereParts.push(`${quoteIdent(syncedAtCol)} > $${params.length}`);

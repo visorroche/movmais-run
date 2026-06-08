@@ -4,8 +4,53 @@ import "reflect-metadata";
 import { AppDataSource } from "../../utils/data-source.js";
 
 const TABLE = "freight_resume";
-
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+type Args = {
+  dates: string[];
+  companyId?: number;
+};
+
+type QuoteRow = {
+  id: number;
+  company_id: number;
+  channel: string;
+  state: string;
+  quote_id: string;
+  invoice_value: string | null;
+};
+
+type OptionRow = {
+  freight_quote_id: number;
+  shipping_value: string | null;
+  deadline: number | null;
+  carrier: string | null;
+};
+
+type ItemRow = {
+  freight_quote_id: number;
+  product_id: number | null;
+};
+
+type OrderRow = {
+  quote_id: string;
+  freight_amount: string | null;
+};
+
+type ResumeAgg = {
+  companyId: number;
+  date: string;
+  channel: string;
+  state: string;
+  freightRange: string | null;
+  deadlineBucket: string | null;
+  courier: string;
+  productId: number | null;
+  totalSimulations: number;
+  totalOrders: number;
+  totalValueSimulations: number;
+  totalValueOrders: number;
+};
 
 function parseDate(s: string): string {
   const t = s?.trim();
@@ -15,7 +60,6 @@ function parseDate(s: string): string {
   return t;
 }
 
-/** Retorna datas entre start e end (inclusive), em YYYY-MM-DD. */
 function dateRange(start: string, end: string): string[] {
   const a = new Date(start + "T00:00:00Z").getTime();
   const b = new Date(end + "T00:00:00Z").getTime();
@@ -23,16 +67,12 @@ function dateRange(start: string, end: string): string[] {
   const out: string[] = [];
   for (let t = a; t <= b; t += 24 * 60 * 60 * 1000) {
     const d = new Date(t);
-    const yyyy = d.getUTCFullYear();
-    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const dd = String(d.getUTCDate()).padStart(2, "0");
-    out.push(`${yyyy}-${mm}-${dd}`);
+    out.push(
+      `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`,
+    );
   }
   return out;
 }
-
-/** Argumentos: lista de datas a consolidar (uma ou várias). */
-type Args = { dates: string[] };
 
 function parseArgs(argv: string[]): Args {
   const raw = new Map<string, string>();
@@ -44,180 +84,469 @@ function parseArgs(argv: string[]): Args {
     raw.set(k, parts.slice(1).join("="));
   }
 
+  let companyId: number | undefined;
+  const companyRaw = raw.get("company")?.trim();
+  if (companyRaw) {
+    const n = Number(companyRaw);
+    if (!Number.isInteger(n) || n <= 0) throw new Error("Parâmetro inválido: --company=ID (inteiro positivo).");
+    companyId = n;
+  }
+
   const startStr = raw.get("start-date")?.trim();
   const endStr = raw.get("end-date")?.trim();
   if (startStr || endStr) {
     if (!startStr || !endStr) {
       throw new Error("Para intervalo use ambos --start-date=YYYY-MM-DD e --end-date=YYYY-MM-DD.");
     }
-    const start = parseDate(startStr);
-    const end = parseDate(endStr);
-    const dates = dateRange(start, end);
-    return { dates };
+    return companyId != null
+      ? { dates: dateRange(parseDate(startStr), parseDate(endStr)), companyId }
+      : { dates: dateRange(parseDate(startStr), parseDate(endStr)) };
   }
 
   const dateArg = raw.get("date")?.trim();
-  if (typeof dateArg === "string" && dateArg !== "" && DATE_RE.test(dateArg)) {
-    return { dates: [dateArg] };
+  if (dateArg && DATE_RE.test(dateArg)) {
+    return companyId != null ? { dates: [parseDate(dateArg)], companyId } : { dates: [parseDate(dateArg)] };
   }
-  if (dateArg) {
-    throw new Error("Parâmetro --date deve estar no formato YYYY-MM-DD.");
-  }
+  if (dateArg) throw new Error("Parâmetro --date deve estar no formato YYYY-MM-DD.");
 
-  // Ontem no fuso America/Sao_Paulo (UTC-3), para bater com a data usada na INSERT.
   const now = new Date();
   const brazilOffsetMs = -3 * 60 * 60 * 1000;
-  const brazilNow = new Date(now.getTime() + brazilOffsetMs);
-  const brazilYesterday = new Date(brazilNow);
+  const brazilYesterday = new Date(now.getTime() + brazilOffsetMs);
   brazilYesterday.setUTCDate(brazilYesterday.getUTCDate() - 1);
-  const yyyy = brazilYesterday.getUTCFullYear();
-  const mm = String(brazilYesterday.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(brazilYesterday.getUTCDate()).padStart(2, "0");
-  return { dates: [`${yyyy}-${mm}-${dd}`] };
+  const ymd = `${brazilYesterday.getUTCFullYear()}-${String(brazilYesterday.getUTCMonth() + 1).padStart(2, "0")}-${String(brazilYesterday.getUTCDate()).padStart(2, "0")}`;
+  return companyId != null ? { dates: [ymd], companyId } : { dates: [ymd] };
 }
 
-const INSERT_SQL = `
-INSERT INTO ${TABLE} (
-  company_id, date, channel, state, freight_range, deadline_bucket,
-  total_simulations, total_orders, total_value_simulations, total_value_orders
-)
-WITH
--- Todas as cotações do dia (incluindo as sem opção de entrega disponível).
-all_quotes AS (
-  SELECT
-    fq.id,
-    fq.company_id,
-    COALESCE(fq.date::date, (fq.quoted_at AT TIME ZONE 'America/Sao_Paulo')::date) AS date,
-    COALESCE(TRIM(fq.channel), '') AS channel,
-    COALESCE(UPPER(TRIM(NULLIF(fq.destination_state, ''))), '') AS state,
-    fq.quote_id,
-    fq.invoice_value
-  FROM freight_quotes fq
-  WHERE (fq.quoted_at IS NOT NULL OR fq.date IS NOT NULL)
-    AND (
-      (fq.date IS NOT NULL AND fq.date::date = $1::date)
-      OR (fq.date IS NULL AND (fq.quoted_at AT TIME ZONE 'America/Sao_Paulo')::date = $1::date)
-    )
-),
--- Melhor opção por cotação (menor preço, depois menor prazo); só opções com preço e prazo preenchidos.
-best_option_per_quote AS (
-  SELECT DISTINCT ON (o.freight_quote_id)
-    o.freight_quote_id,
-    o.shipping_value,
-    o.deadline
-  FROM freight_quote_options o
-  WHERE o.shipping_value IS NOT NULL AND o.deadline IS NOT NULL
-  ORDER BY o.freight_quote_id, o.shipping_value ASC NULLS LAST, o.deadline ASC NULLS LAST
-),
-one_per_quote AS (
-  SELECT
-    q.company_id,
-    q.date,
-    q.channel,
-    q.state,
-    q.quote_id,
-    q.invoice_value,
-    CASE
-      WHEN b.shipping_value IS NULL THEN NULL
-      WHEN b.shipping_value = 0 THEN 'R$0,00 (FREE)'
-      WHEN b.shipping_value BETWEEN 0.01 AND 100.00 THEN 'entre R$ 0,01 e R$ 100,00'
-      WHEN b.shipping_value BETWEEN 100.01 AND 200.00 THEN 'entre R$ 100,01 e R$ 200,00'
-      WHEN b.shipping_value BETWEEN 200.01 AND 300.00 THEN 'entre R$ 200,01 e R$ 300,00'
-      WHEN b.shipping_value BETWEEN 300.01 AND 500.00 THEN 'entre R$ 300,01 e R$ 500,00'
-      WHEN b.shipping_value BETWEEN 500.01 AND 1000.00 THEN 'entre R$ 500,01 e R$ 1.000,00'
-      WHEN b.shipping_value BETWEEN 1000.01 AND 10000.00 THEN 'entre R$ 1.000,01 e R$ 10.000,00'
-      ELSE 'acima de R$ 10.000,00'
-    END AS freight_range,
-    CASE
-      WHEN b.deadline IS NULL THEN NULL
-      WHEN b.deadline <= 0 THEN '>0'
-      WHEN b.deadline <= 5 THEN '>0'
-      WHEN b.deadline <= 10 THEN '>5'
-      WHEN b.deadline <= 15 THEN '>10'
-      WHEN b.deadline <= 20 THEN '>15'
-      WHEN b.deadline <= 25 THEN '>20'
-      WHEN b.deadline <= 30 THEN '>25'
-      WHEN b.deadline <= 35 THEN '>30'
-      WHEN b.deadline <= 40 THEN '>35'
-      WHEN b.deadline <= 45 THEN '>40'
-      WHEN b.deadline <= 60 THEN '>45'
-      ELSE '>60'
-    END AS deadline_bucket
-  FROM all_quotes q
-  LEFT JOIN best_option_per_quote b ON b.freight_quote_id = q.id
-),
-with_orders AS (
-  SELECT
-    q.company_id,
-    q.date,
-    q.channel,
-    q.state,
-    q.quote_id,
-    q.freight_range,
-    q.deadline_bucket,
-    q.invoice_value,
-    CASE WHEN fo.quote_id IS NOT NULL THEN 1 ELSE 0 END AS is_order,
-    fo.freight_amount AS order_value
-  FROM one_per_quote q
-  LEFT JOIN freight_orders fo ON fo.quote_id = q.quote_id AND fo.company_id = q.company_id
-)
+function toNum(v: string | number | null | undefined): number {
+  if (v == null) return 0;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function freightRangeFromShippingValue(shippingValue: string | number | null | undefined): string | null {
+  const v = toNum(shippingValue);
+  if (shippingValue == null || shippingValue === "") return null;
+  if (v === 0) return "R$0,00 (FREE)";
+  if (v <= 100) return "entre R$ 0,01 e R$ 100,00";
+  if (v <= 200) return "entre R$ 100,01 e R$ 200,00";
+  if (v <= 300) return "entre R$ 200,01 e R$ 300,00";
+  if (v <= 500) return "entre R$ 300,01 e R$ 500,00";
+  if (v <= 1000) return "entre R$ 500,01 e R$ 1.000,00";
+  if (v <= 10000) return "entre R$ 1.000,01 e R$ 10.000,00";
+  return "acima de R$ 10.000,00";
+}
+
+function deadlineBucketFromDeadline(deadline: number | null | undefined): string | null {
+  if (deadline == null) return null;
+  const d = deadline;
+  if (d <= 0) return ">0";
+  if (d <= 5) return ">0";
+  if (d <= 10) return ">5";
+  if (d <= 15) return ">10";
+  if (d <= 20) return ">15";
+  if (d <= 25) return ">20";
+  if (d <= 30) return ">25";
+  if (d <= 35) return ">30";
+  if (d <= 40) return ">35";
+  if (d <= 45) return ">40";
+  if (d <= 60) return ">45";
+  return ">60";
+}
+
+function aggKey(
+  channel: string,
+  state: string,
+  freightRange: string | null,
+  deadlineBucket: string | null,
+  courier: string,
+  productId: number | null,
+): string {
+  return [channel, state, freightRange ?? "", deadlineBucket ?? "", courier, productId ?? "null"].join("\u0001");
+}
+
+function getOrCreateAgg(
+  map: Map<string, ResumeAgg>,
+  row: Omit<ResumeAgg, "totalSimulations" | "totalOrders" | "totalValueSimulations" | "totalValueOrders">,
+): ResumeAgg {
+  const key = aggKey(row.channel, row.state, row.freightRange, row.deadlineBucket, row.courier, row.productId);
+  let agg = map.get(key);
+  if (!agg) {
+    agg = { ...row, totalSimulations: 0, totalOrders: 0, totalValueSimulations: 0, totalValueOrders: 0 };
+    map.set(key, agg);
+  }
+  return agg;
+}
+
+const QUOTES_PAGE_SQL = `
 SELECT
-  company_id,
-  date,
-  channel,
-  state,
-  freight_range,
-  deadline_bucket,
-  COUNT(*)::int AS total_simulations,
-  SUM(is_order)::int AS total_orders,
-  SUM((invoice_value)::numeric) AS total_value_simulations,
-  SUM(CASE WHEN is_order = 1 THEN (order_value)::numeric ELSE NULL END) AS total_value_orders
-FROM with_orders
-GROUP BY 1, 2, 3, 4, 5, 6
+  fq.id,
+  fq.company_id,
+  COALESCE(TRIM(fq.channel), '') AS channel,
+  COALESCE(UPPER(TRIM(NULLIF(fq.destination_state, ''))), '') AS state,
+  fq.quote_id,
+  fq.invoice_value::text AS invoice_value
+FROM freight_quotes fq
+WHERE fq.company_id = $1::int
+  AND (
+    fq.date = $2::text
+    OR (
+      fq.date IS NULL
+      AND fq.quoted_at IS NOT NULL
+      AND (fq.quoted_at AT TIME ZONE 'America/Sao_Paulo')::date = $2::date
+    )
+  )
+ORDER BY fq.id ASC
+LIMIT $3::int OFFSET $4::int
 `;
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const dates = args.dates;
+const OPTIONS_FOR_QUOTES_SQL = `
+SELECT
+  o.freight_quote_id,
+  o.shipping_value::text AS shipping_value,
+  o.deadline,
+  o.carrier
+FROM freight_quote_options o
+WHERE o.freight_quote_id = ANY($1::int[])
+  AND o.shipping_value IS NOT NULL
+  AND o.deadline IS NOT NULL
+ORDER BY o.freight_quote_id ASC, o.shipping_value::numeric ASC NULLS LAST, o.deadline ASC NULLS LAST
+`;
 
-  console.log(`[resume:freight] consolidando ${dates.length} dia(s) na tabela ${TABLE}: ${dates[0]}${dates.length > 1 ? ` a ${dates[dates.length - 1]}` : ""}`);
+const ITEMS_FOR_QUOTES_SQL = `
+SELECT
+  fqi.quote_id AS freight_quote_id,
+  fqi.product_id
+FROM freight_quotes_items fqi
+WHERE fqi.company_id = $1::int
+  AND fqi.quote_id = ANY($2::int[])
+`;
+
+const ORDERS_FOR_QUOTES_SQL = `
+SELECT fo.quote_id, fo.freight_amount::text AS freight_amount
+FROM freight_orders fo
+WHERE fo.company_id = $1::int
+  AND fo.quote_id = ANY($2::text[])
+`;
+
+async function queryLocal<T>(sql: string, params: unknown[], statementTimeoutMs: number): Promise<T> {
+  return AppDataSource.manager.transaction(async (manager) => {
+    await manager.query(`SET LOCAL statement_timeout = '${statementTimeoutMs}'`);
+    return (await manager.query(sql, params)) as T;
+  });
+}
+
+async function loadCompanyIds(onlyCompanyId?: number): Promise<number[]> {
+  if (onlyCompanyId != null) return [onlyCompanyId];
+  const rows = (await AppDataSource.query(`SELECT id FROM companies ORDER BY id ASC`)) as Array<{ id: number }>;
+  return rows.map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+async function fetchQuotesPage(
+  companyId: number,
+  targetDate: string,
+  offset: number,
+  limit: number,
+  statementTimeoutMs: number,
+): Promise<QuoteRow[]> {
+  return queryLocal<QuoteRow[]>(QUOTES_PAGE_SQL, [companyId, targetDate, limit, offset], statementTimeoutMs);
+}
+
+function bestOptionByQuoteId(options: OptionRow[]): Map<number, OptionRow> {
+  const map = new Map<number, OptionRow>();
+  for (const o of options) {
+    if (!map.has(o.freight_quote_id)) map.set(o.freight_quote_id, o);
+  }
+  return map;
+}
+
+function itemsByQuoteId(items: ItemRow[]): Map<number, Array<number | null>> {
+  const map = new Map<number, Set<number | null>>();
+  for (const it of items) {
+    let set = map.get(it.freight_quote_id);
+    if (!set) {
+      set = new Set();
+      map.set(it.freight_quote_id, set);
+    }
+    set.add(it.product_id);
+  }
+  const out = new Map<number, Array<number | null>>();
+  for (const [qid, set] of map) {
+    out.set(qid, [...set]);
+  }
+  return out;
+}
+
+function productLinesForQuote(quoteId: number, itemsMap: Map<number, Array<number | null>>): Array<number | null> {
+  const raw = itemsMap.get(quoteId);
+  if (!raw || raw.length === 0) return [null];
+  return raw;
+}
+
+function accumulateQuote(
+  map: Map<string, ResumeAgg>,
+  quote: QuoteRow,
+  targetDate: string,
+  best: OptionRow | undefined,
+  productLines: Array<number | null>,
+  order: OrderRow | undefined,
+): void {
+  const lineCount = Math.max(productLines.length, 1);
+  const invoiceTotal = toNum(quote.invoice_value);
+  const invoiceShare = invoiceTotal / lineCount;
+  const hasOrder = Boolean(order);
+  const orderTotal = toNum(order?.freight_amount);
+  const orderShare = hasOrder ? orderTotal / lineCount : 0;
+
+  const freightRange = best ? freightRangeFromShippingValue(best.shipping_value) : null;
+  const deadlineBucket = best ? deadlineBucketFromDeadline(best.deadline) : null;
+  const courier = String(best?.carrier ?? "").trim();
+
+  for (const productId of productLines) {
+    const agg = getOrCreateAgg(map, {
+      companyId: quote.company_id,
+      date: targetDate,
+      channel: quote.channel,
+      state: quote.state,
+      freightRange,
+      deadlineBucket,
+      courier,
+      productId: productId ?? null,
+    });
+    agg.totalSimulations += 1;
+    agg.totalValueSimulations += invoiceShare;
+    if (hasOrder) {
+      agg.totalOrders += 1;
+      agg.totalValueOrders += orderShare;
+    }
+  }
+}
+
+async function processQuotesPage(
+  map: Map<string, ResumeAgg>,
+  quotes: QuoteRow[],
+  targetDate: string,
+  companyId: number,
+  statementTimeoutMs: number,
+): Promise<void> {
+  if (!quotes.length) return;
+
+  const quoteIds = quotes.map((q) => q.id);
+  const quoteIdStrs = quotes.map((q) => q.quote_id);
+
+  const [options, items, orders] = await Promise.all([
+    queryLocal<OptionRow[]>(OPTIONS_FOR_QUOTES_SQL, [quoteIds], statementTimeoutMs),
+    queryLocal<ItemRow[]>(ITEMS_FOR_QUOTES_SQL, [companyId, quoteIds], statementTimeoutMs),
+    queryLocal<OrderRow[]>(ORDERS_FOR_QUOTES_SQL, [companyId, quoteIdStrs], statementTimeoutMs),
+  ]);
+
+  const bestByQuote = bestOptionByQuoteId(options);
+  const itemsMap = itemsByQuoteId(items);
+  const ordersByQuoteId = new Map(orders.map((o) => [o.quote_id, o]));
+
+  for (const quote of quotes) {
+    accumulateQuote(
+      map,
+      quote,
+      targetDate,
+      bestByQuote.get(quote.id),
+      productLinesForQuote(quote.id, itemsMap),
+      ordersByQuoteId.get(quote.quote_id),
+    );
+  }
+}
+
+async function persistAggregates(
+  aggregates: Map<string, ResumeAgg>,
+  statementTimeoutMs: number,
+): Promise<number> {
+  const rows = [...aggregates.values()];
+  if (!rows.length) return 0;
+
+  const BATCH = 200;
+  let inserted = 0;
+
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const params: unknown[] = [];
+    const valueParts: string[] = [];
+    let p = 1;
+
+    for (const r of batch) {
+      valueParts.push(
+        `($${p++}::int, $${p++}::date, $${p++}::varchar, $${p++}::varchar, $${p++}::varchar, $${p++}::varchar, $${p++}::varchar, $${p++}::int, $${p++}::int, $${p++}::int, $${p++}::numeric, $${p++}::numeric)`,
+      );
+      params.push(
+        r.companyId,
+        r.date,
+        r.channel,
+        r.state,
+        r.freightRange,
+        r.deadlineBucket,
+        r.courier,
+        r.productId,
+        r.totalSimulations,
+        r.totalOrders,
+        r.totalValueSimulations,
+        r.totalValueOrders,
+      );
+    }
+
+    const sql = `
+      INSERT INTO ${TABLE} (
+        company_id, date, channel, state, freight_range, deadline_bucket, courier, product_id,
+        total_simulations, total_orders, total_value_simulations, total_value_orders
+      ) VALUES ${valueParts.join(", ")}
+    `;
+
+    await queryLocal(sql, params, statementTimeoutMs);
+    inserted += batch.length;
+  }
+
+  return inserted;
+}
+
+async function consolidateCompanyDay(
+  targetDate: string,
+  companyId: number,
+  pageSize: number,
+  statementTimeoutMs: number,
+): Promise<{ resumeRows: number; quotesProcessed: number }> {
+  const agg = new Map<string, ResumeAgg>();
+  let offset = 0;
+  let quotesProcessed = 0;
+  let pageNum = 0;
+
+  await queryLocal(
+    `DELETE FROM ${TABLE} WHERE date = $1::date AND company_id = $2::int`,
+    [targetDate, companyId],
+    statementTimeoutMs,
+  );
+
+  for (;;) {
+    pageNum += 1;
+    const page = await fetchQuotesPage(companyId, targetDate, offset, pageSize, statementTimeoutMs);
+    if (!page.length) break;
+
+    await processQuotesPage(agg, page, targetDate, companyId, statementTimeoutMs);
+    quotesProcessed += page.length;
+    offset += page.length;
+
+    if (page.length < pageSize) break;
+  }
+
+  const resumeRows = await persistAggregates(agg, statementTimeoutMs);
+  return { resumeRows, quotesProcessed };
+}
+
+async function runCompaniesInParallel(
+  companyIds: number[],
+  concurrency: number,
+  fn: (companyId: number, workerIdx: number) => Promise<void>,
+): Promise<void> {
+  const queue = companyIds.slice();
+  const worker = async (workerIdx: number) => {
+    while (queue.length > 0) {
+      const companyId = queue.shift();
+      if (companyId == null) return;
+      await fn(companyId, workerIdx);
+    }
+  };
+  const workerCount = Math.min(concurrency, companyIds.length);
+  if (workerCount === 0) return;
+  await Promise.all(Array.from({ length: workerCount }, (_, i) => worker(i + 1)));
+}
+
+async function main(): Promise<void> {
+  const { dates, companyId: onlyCompanyId } = parseArgs(process.argv.slice(2));
+  const concurrency = Math.max(
+    1,
+    Number(process.env.FREIGHT_RESUME_COMPANY_CONCURRENCY ?? process.env.SCHEDULER_COMPANY_CONCURRENCY ?? 4) || 4,
+  );
+  const pageSize = Math.max(100, Number(process.env.FREIGHT_RESUME_PAGE_SIZE ?? 2000) || 2000);
+  const statementTimeoutMs = Number(process.env.FREIGHT_RESUME_STATEMENT_TIMEOUT_MS ?? 120_000);
+
+  console.log(
+    `[resume:freight] consolidando ${dates.length} dia(s) em ${TABLE}: ${dates[0]}${dates.length > 1 ? ` a ${dates[dates.length - 1]}` : ""}` +
+      `${onlyCompanyId ? ` company=${onlyCompanyId}` : ""} paralelo=${concurrency} page_size=${pageSize} (agregação em código)`,
+  );
 
   await AppDataSource.initialize();
 
-  /** Extrai quantidade de linhas do resultado (pg retorna { rowCount }, TypeORM às vezes só rows). */
-  const rowCount = (r: unknown): number | null => {
-    if (Array.isArray(r)) return r.length;
-    if (r && typeof r === "object" && "rowCount" in r) {
-      const n = (r as { rowCount?: number | null }).rowCount;
-      return n != null ? n : null;
-    }
-    return null;
-  };
+  let companyIds: number[] = [];
+  try {
+    companyIds = await loadCompanyIds(onlyCompanyId);
+  } catch (err: unknown) {
+    console.error(`[resume:freight] falha ao listar companies: ${String((err as Error)?.message ?? err)}`);
+    await AppDataSource.destroy().catch(() => undefined);
+    process.exit(1);
+  }
+
+  if (!companyIds.length) {
+    console.warn("[resume:freight] nenhuma company para processar.");
+    await AppDataSource.destroy().catch(() => undefined);
+    return;
+  }
+
+  let totalCompanies = 0;
+  let totalErrors = 0;
+  let totalResumeRows = 0;
+  let totalQuotes = 0;
 
   try {
-    let totalInserted = 0;
     for (const targetDate of dates) {
-      const deleteResult = await AppDataSource.query(
-        `DELETE FROM ${TABLE} WHERE date = $1::date`,
-        [targetDate],
+      console.log(
+        `[resume:freight] --- ${targetDate} companies=${companyIds.length} (paralelo=${concurrency}) ---`,
       );
-      const deleted = rowCount(deleteResult);
-      console.log(`[resume:freight] removidas linhas antigas para ${targetDate} (rowCount=${deleted ?? "?"})`);
 
-      const insertResult = await AppDataSource.query(INSERT_SQL, [targetDate]);
-      const inserted = rowCount(insertResult) ?? 0;
-      totalInserted += inserted;
-      console.log(`[resume:freight] inseridas ${inserted} linhas para ${targetDate}`);
+      let dayOk = 0;
+      let dayRows = 0;
+      let dayQuotes = 0;
+      const dayErrors: string[] = [];
+
+      await runCompaniesInParallel(companyIds, concurrency, async (companyId, workerIdx) => {
+        const t0 = Date.now();
+        try {
+          const { resumeRows, quotesProcessed } = await consolidateCompanyDay(
+            targetDate,
+            companyId,
+            pageSize,
+            statementTimeoutMs,
+          );
+          const elapsed = Math.round((Date.now() - t0) / 1000);
+          if (quotesProcessed === 0) return;
+
+          console.log(
+            `[resume:freight] ok date=${targetDate} company=${companyId} quotes=${quotesProcessed} resume_rows=${resumeRows} worker=${workerIdx} elapsed=${elapsed}s`,
+          );
+          dayOk += 1;
+          dayRows += resumeRows;
+          dayQuotes += quotesProcessed;
+          totalCompanies += 1;
+          totalResumeRows += resumeRows;
+          totalQuotes += quotesProcessed;
+        } catch (err: unknown) {
+          totalErrors += 1;
+          const msg = String((err as Error)?.message ?? err);
+          dayErrors.push(`company ${companyId}: ${msg}`);
+          console.error(`[resume:freight] erro date=${targetDate} company=${companyId}: ${msg}`);
+        }
+      });
+
+      console.log(
+        `[resume:freight] dia ${targetDate} finalizado companies_com_dados=${dayOk} quotes=${dayQuotes} resume_rows=${dayRows} erros=${dayErrors.length}`,
+      );
     }
-    if (totalInserted === 0 && dates.length > 0) {
-      console.log(`[resume:freight] dica: se não há dados no período, confira se há cotações para as datas informadas.`);
-    }
+
+    console.log(
+      `[resume:freight] concluído companies=${totalCompanies} quotes=${totalQuotes} resume_rows=${totalResumeRows} erros=${totalErrors}`,
+    );
+    if (totalErrors > 0) process.exitCode = 2;
   } finally {
     await AppDataSource.destroy().catch(() => undefined);
   }
 }
 
-main().catch((err) => {
-  console.error("[resume:freight] erro:", err);
+main().catch((err: unknown) => {
+  console.error("[resume:freight] erro fatal:", err);
   process.exit(1);
 });
