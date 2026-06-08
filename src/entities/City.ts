@@ -17,4 +17,7 @@ export class City {
 
   @Column({ type: "text", nullable: true })
   city?: string | null;
+
+  @Column({ type: "smallint", default: 0 })
+  numPeople?: number;
 }
