@@ -14,6 +14,8 @@ Este projeto roda jobs em **intervalos fixos** (não é agendado por horário do
 | Products | Tray | `tray:products` | **a cada 3 horas** | Roda na inicialização (após ~10s). |
 | Products | AnyMarket | `anymarket:products` | **a cada 3 horas** | Roda na inicialização (após ~12s). Config: `{"token":"..."}` |
 | Database B2B | Database | `databaseB2b:*` | **a cada 1 hora** | Roda na inicialização. Usa config em `company_platforms.config`. |
+| iClinic token | iClinic | `iclinic:getToken` → `npm run script:iclinic:getToken` | **todo dia 01:00** (America/Sao_Paulo) | Playwright: login; grava `token` + `cookies` na config. Ver [iClinic](#iclinic-saas). |
+| iClinic agenda | iClinic | `iclinic:getBookings` → `npm run script:iclinic:getBookings` | **todo dia 01:10** (America/Sao_Paulo) | Agenda do **dia anterior** por `representatives.external_id`. Backfill: `--start-date` / `--end-date`. Ver [iClinic](#iclinic-saas). |
 
 ### Variáveis de ambiente (mensagens recorrentes)
 
@@ -30,6 +32,8 @@ npm run script:recurrent-messages:tick
 ## Comandos para rodar manualmente
 
 Obs.: para passar parâmetros (`--company`, `--start-date`, etc) via `npm run`, use `--` antes.
+
+Integrações por plataforma (inclui **iClinic** `script:iclinic:getToken` / `script:iclinic:getBookings`): seção [Integrações (execução manual)](#integrações-execução-manual).
 
 ### Mensagens recorrentes (tick na API)
 
@@ -95,6 +99,55 @@ O **`--`** depois do nome do script é obrigatório para o npm repassar os parâ
 Use apenas em ambiente de desenvolvimento / base de testes.
 
 ## Integrações (execução manual)
+
+### iClinic (SaaS)
+
+Plataforma `slug=iclinic`. Primeira execução: `npm install` e `npx playwright install chromium`.
+
+| Comando npm | Job no scheduler | Arquivo | Entidades / destino |
+|---|---|---|---|
+| `script:iclinic:getToken` | `iclinic:getToken` (01:00 America/Sao_Paulo) | `src/commands/iclinic/getToken.ts` | `company_platforms.config`: `token`, `cookies`, `clinic_id`, etc. |
+| `script:iclinic:getBookings` | `iclinic:getBookings` (01:10; após getToken) | `src/commands/iclinic/getBookings.ts` | `customers`, `products`, `orders`, `order_items`, `logs` |
+
+Disparo manual via scheduler HTTP (`POST /run-script`): `platform=iclinic`, `script=getToken` ou `script=getBookings`, `company_id` obrigatório; para bookings opcional `start_date` (vira `--date=` no script).
+
+**Config** (`company_platforms.config`): `email`, `password`, `token` (preenchido pelo getToken), `cookies`, `clinic_id` (opcional).
+
+**Pré-requisitos:** representantes em `representatives` com `external_id` = `agenda_id` do iClinic e `active=true`. Pacientes (`customers`, `segmentation=iclinic_patient`): `representative_id` fixo se já atendido por agenda principal (`261948` Ornela, `267595` Maria Baracat); senão, último médico que atendeu. Pedidos: `customer` = paciente, `representative` = médico da agenda do evento.
+
+```bash
+cd script-bi
+npm run script:iclinic:getToken -- --company=28
+npm run script:iclinic:getBookings -- --company=28
+```
+
+**getToken** — parâmetros:
+
+| Parâmetro | Obrigatório | Descrição |
+|---|---|---|
+| `--company=ID` | sim | Company com plataforma iclinic ativa |
+
+**getBookings** — parâmetros:
+
+| Parâmetro | Obrigatório | Descrição |
+|---|---|---|
+| `--company=ID` | sim | Company com plataforma iclinic ativa e token válido |
+| `--date=YYYY-MM-DD` | não | Um dia (se omitido e sem intervalo: **ontem** em America/Sao_Paulo) |
+| `--start-date=YYYY-MM-DD` | não* | Início do intervalo (inclusive); exige `--end-date` |
+| `--end-date=YYYY-MM-DD` | não* | Fim do intervalo (inclusive); consulta **dia a dia** por representante |
+
+\* Intervalo: a API é chamada uma vez por dia × cada `representatives.external_id`; o comando imprime progresso nos logs até concluir.
+
+Se a sessão expirar durante o `getBookings`, o comando tenta **renovar o token automaticamente** (mesmo fluxo Playwright do `getToken`, 1× por execução), repete a agenda atual e segue. Se a renovação falhar ou a sessão continuar inválida, **interrompe** o restante do período (não fica consultando agenda por agenda com erro repetido).
+
+```bash
+# um dia
+npm run script:iclinic:getBookings -- --company=28 --date=2026-05-19
+# período (backfill)
+npm run script:iclinic:getBookings -- --company=28 --start-date=2026-01-01 --end-date=2026-01-31
+```
+
+Variáveis opcionais: `ICLINIC_HEADLESS=false`, `DEBUG_ICLINIC=true`, `ICLINIC_CLINIC_ID`.
 
 ### Precode
 

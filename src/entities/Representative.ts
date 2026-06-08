@@ -31,6 +31,10 @@ export class Representative {
   @Column({ type: "varchar", nullable: true })
   externalId?: string | null;
 
+  /** IDs externos de registros unificados neste representante. */
+  @Column({ type: "jsonb", nullable: true, name: "aliases_external_id", default: () => "'[]'::jsonb" })
+  aliasesExternalId?: string[] | null;
+
   @Column({ type: "varchar", default: "" })
   name!: string;
 
@@ -86,5 +90,8 @@ export class Representative {
 
   @Column({ type: "text", nullable: true })
   obs?: string | null;
+
+  @Column({ type: "jsonb", nullable: true })
+  metadata?: Record<string, unknown> | null;
 }
 

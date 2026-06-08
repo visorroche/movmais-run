@@ -20,6 +20,10 @@ import {
   describeDatabaseB2bConfig,
   collectSourceColumnsFromMapping,
 } from "../../utils/databaseB2b.js";
+import {
+  applyRepresentativeExternalIdLookup,
+  registerRepresentativeInExternalIdMap,
+} from "../../utils/representativeAliases.js";
 
 let __stage = "init";
 
@@ -244,14 +248,13 @@ async function main() {
       __stage = "load_existing_representatives_batch";
       const existingByExternalId = new Map<string, Representative>();
       if (batchExternalIds.length) {
-        const existing = await repRepo
+        const qb = repRepo
           .createQueryBuilder("r")
-          .where("r.company_id = :companyId", { companyId: company.id })
-          .andWhere("r.external_id IN (:...ids)", { ids: batchExternalIds })
-          .getMany();
+          .where("r.company_id = :companyId", { companyId: company.id });
+        applyRepresentativeExternalIdLookup(qb, "r", batchExternalIds);
+        const existing = await qb.getMany();
         for (const rep of existing) {
-          const key = String(rep.externalId ?? "").trim();
-          if (key) existingByExternalId.set(key, rep);
+          registerRepresentativeInExternalIdMap(existingByExternalId, rep);
         }
       }
 
@@ -322,28 +325,32 @@ async function main() {
           if (supervisorLookupColumn === "internal_code") {
             // compat: quando o cliente manda "1" e nosso internal_code está "0001"
             qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids: supervisorKeys });
+          } else if (supervisorLookupColumn === "external_id") {
+            applyRepresentativeExternalIdLookup(qb, "r", supervisorKeys);
           } else {
             qb.andWhere(`r.${supervisorLookupColumn} IN (:...ids)`, { ids: supervisorKeys });
           }
           const supervisors = await qb.getMany();
 
           const supByExternal = new Map<string, Representative>();
-          for (const s of supervisors) {
-            const key =
-              supervisorLookupColumn === "external_id"
-                ? String(s.externalId ?? "").trim()
-                : supervisorLookupColumn === "internal_code"
+          if (supervisorLookupColumn === "external_id") {
+            for (const s of supervisors) registerRepresentativeInExternalIdMap(supByExternal, s);
+          } else {
+            for (const s of supervisors) {
+              const key =
+                supervisorLookupColumn === "internal_code"
                   ? String((s as any).internalCode ?? "").trim()
                   : supervisorLookupColumn === "document"
                     ? String((s as any).document ?? "").trim()
                     : supervisorLookupColumn === "name"
                       ? String((s as any).name ?? "").trim()
                       : String((s as any).category ?? "").trim();
-            if (key) {
-              supByExternal.set(key, s);
-              if (supervisorLookupColumn === "internal_code") {
-                const noZeros = key.replace(/^0+/, "");
-                if (noZeros) supByExternal.set(noZeros, s);
+              if (key) {
+                supByExternal.set(key, s);
+                if (supervisorLookupColumn === "internal_code") {
+                  const noZeros = key.replace(/^0+/, "");
+                  if (noZeros) supByExternal.set(noZeros, s);
+                }
               }
             }
           }

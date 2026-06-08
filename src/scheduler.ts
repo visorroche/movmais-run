@@ -27,7 +27,9 @@ type JobName =
   | "databaseB2b:orders"
   | "databaseB2b:sync"
   | "resume:freight"
-  | "recurrent-messages:tick";
+  | "recurrent-messages:tick"
+  | "iclinic:getToken"
+  | "iclinic:getBookings";
 
 const JOB_LOCKS = new Map<JobName, boolean>();
 let shuttingDown = false;
@@ -260,6 +262,20 @@ function startHttpServer() {
         },
       },
     },
+    iclinic: {
+      getToken: {
+        scriptRel: "commands/iclinic/getToken.js",
+        buildArgs: ({ companyId }) => [`--company=${companyId}`],
+      },
+      getBookings: {
+        scriptRel: "commands/iclinic/getBookings.js",
+        buildArgs: ({ companyId, startDate }) => {
+          const argv = [`--company=${companyId}`];
+          if (startDate) argv.push(`--date=${startDate}`);
+          return argv;
+        },
+      },
+    },
   };
 
   const server = http.createServer((req, res) => {
@@ -359,6 +375,38 @@ function formatYmdUtc(d: Date): string {
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+const SCHEDULER_TZ = process.env.SCHEDULER_DAILY_TZ || "America/Sao_Paulo";
+
+function getTimePartsInTz(date: Date, timeZone: string): { ymd: string; hour: number; minute: number } {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const ymd = `${get("year")}-${get("month")}-${get("day")}`;
+  return { ymd, hour: Number(get("hour")), minute: Number(get("minute")) };
+}
+
+/** Dispara no máximo uma vez por dia civil (fuso SCHEDULER_DAILY_TZ) no horário HH:MM. */
+function scheduleDailyAt(hour: number, minute: number, jobName: JobName, fn: () => Promise<void>): NodeJS.Timeout {
+  let lastRunKey = "";
+  return setInterval(() => {
+    if (shuttingDown) return;
+    const { ymd, hour: h, minute: m } = getTimePartsInTz(new Date(), SCHEDULER_TZ);
+    const key = `${ymd}@${hour}:${minute}`;
+    if (h === hour && m === minute && lastRunKey !== key) {
+      lastRunKey = key;
+      void runJob(jobName, fn);
+    }
+  }, 60_000);
 }
 
 function formatIsoLikeAllpostUtc(d: Date): string {
@@ -706,6 +754,16 @@ async function main() {
       );
     });
 
+  const tickIclinicGetToken = () =>
+    runJob("iclinic:getToken", async () => {
+      await runForCompanies("iclinic", "commands/iclinic/getToken.js", (companyId) => [`--company=${companyId}`]);
+    });
+
+  const tickIclinicGetBookings = () =>
+    runJob("iclinic:getBookings", async () => {
+      await runForCompanies("iclinic", "commands/iclinic/getBookings.js", (companyId) => [`--company=${companyId}`]);
+    });
+
   // job: database B2B (a cada 1h) — período: ontem até +30 dias (inclui vendas futuras)
   const DBB2B_SLUGS = ["b2b_database", "database_b2b", "databaseb2b", "databaseB2b"];
   const tickDatabaseB2bSync = () =>
@@ -718,7 +776,7 @@ async function main() {
 
   console.log("[scheduler] iniciado.");
   console.log(
-    "[scheduler] agendas: recurrent-messages=10min, allpost-quotes=1h, allpost-freight-orders=1h, orders=30min (precode/tray/anymarket/panorama), products=3h (precode/tray/anymarket), database_b2b=1h, resume:freight=24h",
+    "[scheduler] agendas: recurrent-messages=10min, iclinic-getToken=01:00, iclinic-getBookings=01:10, allpost-quotes=1h, allpost-freight-orders=1h, orders=30min, products=3h, database_b2b=1h, resume:freight=24h",
   );
 
   // roda na partida (com pequeno delay para evitar corrida com deploy)
@@ -748,6 +806,8 @@ async function main() {
   timers.push(setInterval(() => void tickAnymarketProducts(), EVERY_3_HOURS));
   timers.push(setInterval(() => void tickResumeFreight(), EVERY_24_HOURS));
   timers.push(setInterval(() => void tickDatabaseB2bSync(), EVERY_1_HOUR));
+  timers.push(scheduleDailyAt(1, 0, "iclinic:getToken", tickIclinicGetToken));
+  timers.push(scheduleDailyAt(1, 10, "iclinic:getBookings", tickIclinicGetBookings));
 
   // loop “keep alive” para permitir shutdown gracioso
   while (!shuttingDown) {

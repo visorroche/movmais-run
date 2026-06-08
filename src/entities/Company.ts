@@ -54,4 +54,16 @@ export class Company {
   /** Usa cadastro interno de categorias (`products.category_id`) em vez de strings livres. */
   @Column({ name: 'use_category_registry', type: 'boolean', default: false })
   use_category_registry!: boolean;
+
+  /** Quando true, o menu Dashboard lista apenas dashboards customizados (oculta os padrões). */
+  @Column({ name: 'custom_dashboards_only', type: 'boolean', default: false })
+  custom_dashboards_only!: boolean;
+
+  /** Permite usuários da empresa criarem dashboards customizados (além de admin/permissão individual). */
+  @Column({ name: 'allow_custom_dashboards', type: 'boolean', default: false })
+  allow_custom_dashboards!: boolean;
+
+  /** Exibe o menu Metas (/metas) no painel lateral. */
+  @Column({ name: 'metas', type: 'boolean', default: false })
+  metas!: boolean;
 }

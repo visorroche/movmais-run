@@ -23,6 +23,10 @@ import {
   collectSourceColumnsFromMapping,
   joinOrderAndItemRows,
 } from "../../utils/databaseB2b.js";
+import {
+  applyRepresentativeExternalIdLookup,
+  registerRepresentativeInExternalIdMap,
+} from "../../utils/representativeAliases.js";
 
 function toIntLoose(v: unknown): number | null {
   if (v == null) return null;
@@ -700,14 +704,39 @@ async function main() {
     const fetchRepsByLookup = async (lookupField: RepresentativeLookupField, vals: string[]) => {
       const out = new Map<string, Representative>();
       const col = repColSql[lookupField];
+
+      const fetchExternalIdChunk = async (ids: string[]) => {
+        const run = async () => {
+          const qb = AppDataSource.getRepository(Representative)
+            .createQueryBuilder("r")
+            .where("r.company_id = :companyId", { companyId: company.id });
+          applyRepresentativeExternalIdLookup(qb, "r", ids);
+          return qb.getMany();
+        };
+        try {
+          return await run();
+        } catch (err) {
+          if (!isConnectionTerminatedError(err)) throw err;
+          console.warn("[databaseB2b:orders] conexão interna caiu; reiniciando e tentando novamente (reps lookup external_id)...");
+          await resetInternalDbConnection();
+          return run();
+        }
+      };
+
       for (const ids of chunk(vals, 200)) {
+        if (lookupField === "external_id") {
+          // eslint-disable-next-line no-await-in-loop
+          const list = await fetchExternalIdChunk(ids);
+          for (const r of list) registerRepresentativeInExternalIdMap(out, r);
+          continue;
+        }
+
         let list: Representative[] = [];
         try {
           // eslint-disable-next-line no-await-in-loop
           {
             const qb = AppDataSource.getRepository(Representative).createQueryBuilder("r").where("r.company_id = :companyId", { companyId: company.id });
             if (lookupField === "internal_code") {
-              // compat: cliente manda "1" e nosso internal_code está "0001"
               qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids });
             } else {
               qb.andWhere(`r.${col} IN (:...ids)`, { ids });
@@ -735,15 +764,13 @@ async function main() {
         }
         for (const r of list) {
           const key =
-            lookupField === "external_id"
-              ? String((r as any).externalId ?? "").trim()
-              : lookupField === "internal_code"
-                ? String((r as any).internalCode ?? "").trim()
-                : lookupField === "document"
-                  ? String((r as any).document ?? "").trim()
-                  : lookupField === "name"
-                    ? String((r as any).name ?? "").trim()
-                    : String((r as any).category ?? "").trim();
+            lookupField === "internal_code"
+              ? String((r as any).internalCode ?? "").trim()
+              : lookupField === "document"
+                ? String((r as any).document ?? "").trim()
+                : lookupField === "name"
+                  ? String((r as any).name ?? "").trim()
+                  : String((r as any).category ?? "").trim();
           if (key) {
             out.set(key, r);
             if (lookupField === "internal_code") {
