@@ -26,7 +26,11 @@ import {
 } from "../../utils/databaseB2b.js";
 import {
   applyRepresentativeExternalIdLookup,
+  expandInternalCodeLookupIds,
+  normalizeRepresentativeLookupKey,
   registerRepresentativeInExternalIdMap,
+  registerRepresentativeInternalCodeInMap,
+  resolveRepresentativeFromLookupMap,
 } from "../../utils/representativeAliases.js";
 
 function toIntLoose(v: unknown): number | null {
@@ -201,6 +205,20 @@ function unionStrings(...sets: Array<Set<string>>): string[] {
   const out = new Set<string>();
   for (const s of sets) for (const v of s) out.add(v);
   return Array.from(out);
+}
+
+function addRepresentativeLookupVal(
+  set: Set<string>,
+  raw: unknown,
+  lookupField: RepresentativeLookupField,
+): void {
+  const key = normalizeRepresentativeLookupKey(raw);
+  if (!key) return;
+  if (lookupField === "internal_code") {
+    for (const v of expandInternalCodeLookupIds([key])) set.add(v);
+    return;
+  }
+  set.add(key);
 }
 
 let __stage = "init";
@@ -623,14 +641,21 @@ async function main() {
       const customerKey = String(applyFieldMapping(orderFields.customer_id, first) ?? "").trim();
       if (customerKey) customerLookupVals.add(customerKey);
 
-      const repKey = String(applyFieldMapping(orderFields.representative_id, first) ?? "").trim();
-      if (repKey) repLookupVals.add(repKey);
-
-      const assistantKey = String(applyFieldMapping(orderFields.assistant_id, first) ?? "").trim();
-      if (assistantKey) assistantLookupVals.add(assistantKey);
-
-      const supervisorKey = String(applyFieldMapping(orderFields.supervisor_id, first) ?? "").trim();
-      if (supervisorKey) supervisorLookupVals.add(supervisorKey);
+      addRepresentativeLookupVal(
+        repLookupVals,
+        applyFieldMapping(orderFields.representative_id, first),
+        repLookupField,
+      );
+      addRepresentativeLookupVal(
+        assistantLookupVals,
+        applyFieldMapping(orderFields.assistant_id, first),
+        assistantLookupField,
+      );
+      addRepresentativeLookupVal(
+        supervisorLookupVals,
+        applyFieldMapping(orderFields.supervisor_id, first),
+        supervisorLookupField,
+      );
     }
 
     for (const [, orderRows] of groups.entries()) {
@@ -738,15 +763,18 @@ async function main() {
           continue;
         }
 
+        const queryIds = lookupField === "internal_code" ? expandInternalCodeLookupIds(ids) : ids;
+        if (!queryIds.length) continue;
+
         let list: Representative[] = [];
         try {
           // eslint-disable-next-line no-await-in-loop
           {
             const qb = AppDataSource.getRepository(Representative).createQueryBuilder("r").where("r.company_id = :companyId", { companyId: company.id });
             if (lookupField === "internal_code") {
-              qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids });
+              qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids: queryIds });
             } else {
-              qb.andWhere(`r.${col} IN (:...ids)`, { ids });
+              qb.andWhere(`r.${col} IN (:...ids)`, { ids: queryIds });
             }
             list = await qb.getMany();
           }
@@ -759,9 +787,9 @@ async function main() {
             {
               const qb = AppDataSource.getRepository(Representative).createQueryBuilder("r").where("r.company_id = :companyId", { companyId: company.id });
               if (lookupField === "internal_code") {
-                qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids });
+                qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids: queryIds });
               } else {
-                qb.andWhere(`r.${col} IN (:...ids)`, { ids });
+                qb.andWhere(`r.${col} IN (:...ids)`, { ids: queryIds });
               }
               list = await qb.getMany();
             }
@@ -770,21 +798,17 @@ async function main() {
           }
         }
         for (const r of list) {
-          const key =
-            lookupField === "internal_code"
-              ? String((r as any).internalCode ?? "").trim()
-              : lookupField === "document"
-                ? String((r as any).document ?? "").trim()
-                : lookupField === "name"
-                  ? String((r as any).name ?? "").trim()
-                  : String((r as any).category ?? "").trim();
-          if (key) {
-            out.set(key, r);
-            if (lookupField === "internal_code") {
-              const noZeros = key.replace(/^0+/, "");
-              if (noZeros) out.set(noZeros, r);
-            }
+          if (lookupField === "internal_code") {
+            registerRepresentativeInternalCodeInMap(out, r);
+            continue;
           }
+          const key =
+            lookupField === "document"
+              ? String((r as any).document ?? "").trim()
+              : lookupField === "name"
+                ? String((r as any).name ?? "").trim()
+                : String((r as any).category ?? "").trim();
+          if (key) out.set(key, r);
         }
       }
       return out;
@@ -1200,11 +1224,27 @@ async function main() {
           const c = customersByLookup.get(customerKey);
           if (c) order.customer = c;
         }
-        const repKey = String(applyFieldMapping(orderFields.representative_id, first) ?? "").trim();
-        if (repKey) {
-          const r = repsByLookup.get(repKey);
-          if (r) order.representative = r;
-        }
+        const rep = resolveRepresentativeFromLookupMap(
+          repsByLookup,
+          applyFieldMapping(orderFields.representative_id, first),
+          repLookupField,
+        );
+        if (rep) order.representative = rep;
+
+        const assistant = resolveRepresentativeFromLookupMap(
+          assistantsByLookup,
+          applyFieldMapping(orderFields.assistant_id, first),
+          assistantLookupField,
+        );
+        if (assistant) (order as any).assistant = assistant;
+
+        const supervisor = resolveRepresentativeFromLookupMap(
+          supervisorsByLookup,
+          applyFieldMapping(orderFields.supervisor_id, first),
+          supervisorLookupField,
+        );
+        if (supervisor) (order as any).supervisor = supervisor;
+
         if (groupSyncedAt) order.sourceSyncedAt = groupSyncedAt;
         ordersWithRows.push({ order, orderRows });
       }
@@ -1394,14 +1434,23 @@ async function main() {
         if (customer) order.customer = customer;
       }
 
-      const repKey = String(applyFieldMapping(orderFields.representative_id, first) ?? "").trim();
-      if (repKey) order.representative = repsByLookup.get(repKey) ?? null;
+      const repKey = normalizeRepresentativeLookupKey(applyFieldMapping(orderFields.representative_id, first));
+      if (repKey) {
+        order.representative =
+          resolveRepresentativeFromLookupMap(repsByLookup, repKey, repLookupField) ?? null;
+      }
 
-      const assistantKey = String(applyFieldMapping(orderFields.assistant_id, first) ?? "").trim();
-      if (assistantKey) (order as any).assistant = assistantsByLookup.get(assistantKey) ?? null;
+      const assistantKey = normalizeRepresentativeLookupKey(applyFieldMapping(orderFields.assistant_id, first));
+      if (assistantKey) {
+        (order as any).assistant =
+          resolveRepresentativeFromLookupMap(assistantsByLookup, assistantKey, assistantLookupField) ?? null;
+      }
 
-      const supervisorKey = String(applyFieldMapping(orderFields.supervisor_id, first) ?? "").trim();
-      if (supervisorKey) (order as any).supervisor = supervisorsByLookup.get(supervisorKey) ?? null;
+      const supervisorKey = normalizeRepresentativeLookupKey(applyFieldMapping(orderFields.supervisor_id, first));
+      if (supervisorKey) {
+        (order as any).supervisor =
+          resolveRepresentativeFromLookupMap(supervisorsByLookup, supervisorKey, supervisorLookupField) ?? null;
+      }
 
       if (groupSyncedAt) order.sourceSyncedAt = groupSyncedAt;
 

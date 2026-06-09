@@ -24,6 +24,12 @@ import {
   collectSourceColumnsFromMapping,
   appendWhereClausesSql,
 } from "../../utils/databaseB2b.js";
+import {
+  expandInternalCodeLookupIds,
+  normalizeRepresentativeLookupKey,
+  registerRepresentativeInternalCodeInMap,
+  resolveRepresentativeFromLookupMap,
+} from "../../utils/representativeAliases.js";
 
 function buildPhonesFromCsv(row: Record<string, any>, rawMapping: string): Record<string, string> | null {
   const cols = parseCsvColumns(rawMapping);
@@ -286,7 +292,14 @@ async function main() {
       );
       const batchTaxIds = Array.from(new Set(batch.map((r) => String(applyFieldMapping(fields.tax_id, r) ?? "").trim()).filter(Boolean)));
       const batchRepExternalIds = Array.from(
-        new Set(batch.map((r) => String(applyFieldMapping(fields.representative_id, r) ?? "").trim()).filter(Boolean)),
+        new Set(
+          batch.flatMap((r) => {
+            const raw = applyFieldMapping(fields.representative_id, r);
+            const key = normalizeRepresentativeLookupKey(raw);
+            if (!key) return [];
+            return repLookupColumn === "internal_code" ? expandInternalCodeLookupIds([key]) : [key];
+          }),
+        ),
       );
       const batchGroupExternalIds = Array.from(
         new Set(batch.map((r) => String(applyFieldMapping((fields as any).group_id, r) ?? "").trim()).filter(Boolean)),
@@ -372,22 +385,28 @@ async function main() {
         for (const ids of chunkArray(batchRepExternalIds, 200)) {
           try {
             // eslint-disable-next-line no-await-in-loop
-            const reps = await repRepo
+            const qb = repRepo
               .createQueryBuilder("r")
-              .where("r.company_id = :companyId", { companyId: company.id })
-              .andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids })
-              .getMany();
+              .where("r.company_id = :companyId", { companyId: company.id });
+            if (repLookupColumn === "internal_code") {
+              qb.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids });
+            } else {
+              qb.andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids });
+            }
+            const reps = await qb.getMany();
             for (const rep of reps) {
+              if (repLookupColumn === "internal_code") {
+                registerRepresentativeInternalCodeInMap(repByLookup, rep);
+                continue;
+              }
               const key =
                 repLookupColumn === "external_id"
                   ? String(rep.externalId ?? "").trim()
-                  : repLookupColumn === "internal_code"
-                    ? String((rep as any).internalCode ?? "").trim()
-                    : repLookupColumn === "document"
-                      ? String((rep as any).document ?? "").trim()
-                      : repLookupColumn === "name"
-                        ? String((rep as any).name ?? "").trim()
-                        : String((rep as any).category ?? "").trim();
+                  : repLookupColumn === "document"
+                    ? String((rep as any).document ?? "").trim()
+                    : repLookupColumn === "name"
+                      ? String((rep as any).name ?? "").trim()
+                      : String((rep as any).category ?? "").trim();
               if (key) repByLookup.set(key, rep);
             }
           } catch (err) {
@@ -397,22 +416,28 @@ async function main() {
               await resetInternalDbConnection();
               const repRepoRetry = AppDataSource.getRepository(Representative);
               // eslint-disable-next-line no-await-in-loop
-              const reps = await repRepoRetry
+              const qbRetry = repRepoRetry
                 .createQueryBuilder("r")
-                .where("r.company_id = :companyId", { companyId: company.id })
-                .andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids })
-                .getMany();
+                .where("r.company_id = :companyId", { companyId: company.id });
+              if (repLookupColumn === "internal_code") {
+                qbRetry.andWhere("(r.internal_code IN (:...ids) OR ltrim(r.internal_code, '0') IN (:...ids))", { ids });
+              } else {
+                qbRetry.andWhere(`r.${repLookupColumn} IN (:...ids)`, { ids });
+              }
+              const reps = await qbRetry.getMany();
               for (const rep of reps) {
+                if (repLookupColumn === "internal_code") {
+                  registerRepresentativeInternalCodeInMap(repByLookup, rep);
+                  continue;
+                }
                 const key =
                   repLookupColumn === "external_id"
                     ? String(rep.externalId ?? "").trim()
-                    : repLookupColumn === "internal_code"
-                      ? String((rep as any).internalCode ?? "").trim()
-                      : repLookupColumn === "document"
-                        ? String((rep as any).document ?? "").trim()
-                        : repLookupColumn === "name"
-                          ? String((rep as any).name ?? "").trim()
-                          : String((rep as any).category ?? "").trim();
+                    : repLookupColumn === "document"
+                      ? String((rep as any).document ?? "").trim()
+                      : repLookupColumn === "name"
+                        ? String((rep as any).name ?? "").trim()
+                        : String((rep as any).category ?? "").trim();
                 if (key) repByLookup.set(key, rep);
               }
               continue;
@@ -507,8 +532,11 @@ async function main() {
         customer.createdAt = parseDateOnlyLoose(applyFieldMapping(createdAtMapping, row)) ?? customer.createdAt ?? null;
         customer.status = toBoolLoose(applyFieldMapping(fields.status, row)) ?? customer.status ?? null;
 
-        const repExternal = String(applyFieldMapping(fields.representative_id, row) ?? "").trim();
-        if (repExternal) customer.representative = repByLookup.get(repExternal) ?? null;
+        const repExternal = normalizeRepresentativeLookupKey(applyFieldMapping(fields.representative_id, row));
+        if (repExternal) {
+          customer.representative =
+            resolveRepresentativeFromLookupMap(repByLookup, repExternal, repLookupColumn) ?? null;
+        }
 
         const groupExternal = String(applyFieldMapping((fields as any).group_id, row) ?? "").trim();
         if (groupExternal) customer.customerGroup = groupByExternalId.get(groupExternal) ?? null;
