@@ -161,6 +161,35 @@ function itemEntitySourceSyncedAt(it: OrderItem | undefined | null): Date | null
   return parseTimestamp(raw as any);
 }
 
+function incomingItemExternalIdsFromRows(orderRows: Record<string, any>[], itemFields: any): string[] {
+  const ids: string[] = [];
+  for (const row of orderRows) {
+    const itemExternalId = String(applyFieldMapping((itemFields as any).external_id, row) ?? "").trim();
+    if (itemExternalId) ids.push(itemExternalId);
+  }
+  return ids;
+}
+
+/** Detecta divergência de linhas (ex.: bulk antigo com v.id desatualizado) sem reprocessar o cabeçalho. */
+function orderItemsNeedReconciliation(
+  orderRows: Record<string, any>[],
+  itemFields: any,
+  orderId: number,
+  existingIdsByOrderId: Map<number, Set<string>>,
+  existingCountByOrderId: Map<number, number>,
+): boolean {
+  const incomingIds = incomingItemExternalIdsFromRows(orderRows, itemFields);
+  const incomingSet = new Set(incomingIds);
+  const existingSet = existingIdsByOrderId.get(orderId) ?? new Set<string>();
+  if (incomingSet.size !== existingSet.size) return true;
+  for (const id of incomingSet) {
+    if (!existingSet.has(id)) return true;
+  }
+  const existingCount = existingCountByOrderId.get(orderId) ?? 0;
+  if (incomingIds.length !== existingCount) return true;
+  return false;
+}
+
 type CustomerLookupField = "external_id" | "internal_cod" | "tax_id" | "email";
 type RepresentativeLookupField = "external_id" | "internal_code" | "document" | "name" | "category";
 type ProductLookupField = "external_id" | "sku" | "ean";
@@ -1053,9 +1082,63 @@ async function main() {
       );
     }
 
+    const existingItemExternalIdsByOrderId = new Map<number, Set<string>>();
+    const existingItemCountByOrderId = new Map<number, number>();
+    const allKnownOrderIds = Array.from(
+      new Set(
+        [...existingOrdersByExternalId.values(), ...legacyOrdersByOrderCode.values()]
+          .map((o) => Number((o as any).id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    );
+    if (allKnownOrderIds.length) {
+      __stage = "load_existing_item_ids_by_order_id";
+      for (const ids of chunk(allKnownOrderIds, 500)) {
+        let list: OrderItem[] = [];
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          list = await itemRepoNow
+            .createQueryBuilder("i")
+            .select(["i.id", "i.externalId", "i.orderId"])
+            .where("i.order_id IN (:...ids)", { ids })
+            .getMany();
+        } catch (err) {
+          if (isConnectionTerminatedError(err)) {
+            console.warn("[databaseB2b:orders] conexão interna caiu; reiniciando e tentando novamente (items by order_id)...");
+            // eslint-disable-next-line no-await-in-loop
+            await resetInternalDbConnectionAndRepos();
+            // eslint-disable-next-line no-await-in-loop
+            list = await itemRepoNow
+              .createQueryBuilder("i")
+              .select(["i.id", "i.externalId", "i.orderId"])
+              .where("i.order_id IN (:...ids)", { ids })
+              .getMany();
+          } else {
+            throw err;
+          }
+        }
+        for (const it of list) {
+          const oid = Number((it as any).orderId ?? (it as any).order?.id);
+          if (!Number.isFinite(oid)) continue;
+          let set = existingItemExternalIdsByOrderId.get(oid);
+          if (!set) {
+            set = new Set<string>();
+            existingItemExternalIdsByOrderId.set(oid, set);
+          }
+          const ext = String((it as any).externalId ?? "").trim();
+          if (ext) set.add(ext);
+          existingItemCountByOrderId.set(oid, (existingItemCountByOrderId.get(oid) ?? 0) + 1);
+        }
+      }
+      console.log(
+        `[databaseB2b:orders] itens existentes por order_id: ${existingItemCountByOrderId.size} pedidos (${Array.from(existingItemCountByOrderId.values()).reduce((a, b) => a + b, 0)} linhas)`,
+      );
+    }
+
     let processedOrders = 0;
     let processedItems = 0;
     let skippedExisting = 0;
+    let reconciledItemsOnly = 0;
     let iterated = 0;
     let maxSyncedAt: Date | null = null;
     let lastCompletedSyncedAt: Date | null = null;
@@ -1367,15 +1450,41 @@ async function main() {
         logProgress();
         continue;
       }
-      // Com --force reprocessa tudo; sem --force, pula só se o max synced_at do grupo no cliente não superar o já aplicado neste pedido.
+      // Com --force reprocessa tudo; sem --force, pula só o cabeçalho se o max synced_at do grupo no cliente não superar o já aplicado neste pedido.
       const storedOrderSync = orderEntitySourceSyncedAt(existing ?? legacy ?? undefined);
-      if (!args.force && (existing || legacy) && groupSyncedAt && storedOrderSync && groupSyncedAt.getTime() <= storedOrderSync.getTime()) {
+      const skipOrderHeader =
+        !args.force &&
+        (existing || legacy) &&
+        groupSyncedAt &&
+        storedOrderSync &&
+        groupSyncedAt.getTime() <= storedOrderSync.getTime();
+
+      const resolvedExisting = existing ?? legacy ?? null;
+      const needsItemReconciliation =
+        skipOrderHeader &&
+        resolvedExisting &&
+        Number.isFinite(Number(resolvedExisting.id)) &&
+        orderItemsNeedReconciliation(
+          orderRows,
+          itemFields,
+          Number(resolvedExisting.id),
+          existingItemExternalIdsByOrderId,
+          existingItemCountByOrderId,
+        );
+
+      if (skipOrderHeader && !needsItemReconciliation) {
         skippedExisting += 1;
         logProgress();
         continue;
       }
-      let order = existing ?? legacy ?? orderRepoNow.create({ company, orderCode });
 
+      const skipItemSyncedAtCheck = Boolean(needsItemReconciliation);
+      if (needsItemReconciliation) reconciledItemsOnly += 1;
+
+      let order = resolvedExisting ?? orderRepoNow.create({ company, orderCode });
+      const hasTotalAmountMapping = Boolean(schemaFieldName((orderFields as any).total_amount).trim());
+
+      if (!skipOrderHeader) {
       order.company = company;
       if (platform) order.platform = platform;
       order.channel = "offline";
@@ -1389,7 +1498,6 @@ async function main() {
       order.totalDiscount = (applyFieldMapping(orderFields.total_discount, first) as any) ?? order.totalDiscount ?? null;
       order.shippingAmount = (applyFieldMapping(orderFields.shipping_amount, first) as any) ?? order.shippingAmount ?? null;
 
-      const hasTotalAmountMapping = Boolean(schemaFieldName((orderFields as any).total_amount).trim());
       if (hasTotalAmountMapping) {
         order.totalAmount = (applyFieldMapping(orderFields.total_amount, first) as any) ?? order.totalAmount ?? null;
       } else {
@@ -1488,6 +1596,34 @@ async function main() {
         lastCompletedSyncedAt = groupSyncedAt;
         if (!maxSyncedAt || groupSyncedAt.getTime() > maxSyncedAt.getTime()) maxSyncedAt = groupSyncedAt;
       }
+      } else if (needsItemReconciliation && !hasTotalAmountMapping) {
+        let sum = 0;
+        let used = 0;
+        for (const r of orderRows) {
+          const q = toIntLoose(applyFieldMapping(itemFields.quantity, r));
+          const pRaw = applyFieldMapping(itemFields.unit_price, r);
+          const p = toNumberLoose(pRaw);
+          if (q == null || p == null) continue;
+          sum += q * (Math.round(p * 100) / 100);
+          used += 1;
+        }
+        if (used > 0) {
+          order.totalAmount = sum.toFixed(2);
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            order = await orderRepoNow.save(order);
+          } catch (err) {
+            if (isConnectionTerminatedError(err) || isQueryReadTimeoutError(err)) {
+              // eslint-disable-next-line no-await-in-loop
+              await resetInternalDbConnectionAndRepos();
+              // eslint-disable-next-line no-await-in-loop
+              order = await orderRepoNow.save(order);
+            } else {
+              throw err;
+            }
+          }
+        }
+      }
 
       // itens: upsert por external_id (e remove os que sumiram)
       const incomingItemExternalIdsPerOrder: string[] = [];
@@ -1503,6 +1639,7 @@ async function main() {
         const existingItem = existingItemsByExternalId.get(itemExternalId) ?? null;
         if (
           !args.force &&
+          !skipItemSyncedAtCheck &&
           existingItem &&
           rowItemSyncedAt &&
           itemEntitySourceSyncedAt(existingItem) &&
@@ -1587,6 +1724,8 @@ async function main() {
             throw err;
           }
         }
+        existingItemExternalIdsByOrderId.set(Number(order.id), new Set(uniqueIncoming));
+        existingItemCountByOrderId.set(Number(order.id), uniqueIncoming.length);
       } else {
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -1610,6 +1749,8 @@ async function main() {
             throw err;
           }
         }
+        existingItemExternalIdsByOrderId.set(Number(order.id), new Set());
+        existingItemCountByOrderId.set(Number(order.id), 0);
       }
 
       processedOrders += 1;
@@ -1623,7 +1764,7 @@ async function main() {
     }
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     console.log(
-      `[databaseB2b:orders] concluído company=${args.company}${range} orders_processed=${processedOrders} items_processed=${processedItems} skipped_existing=${skippedExisting}${onlyInsertLog} elapsed=${elapsed}s`,
+      `[databaseB2b:orders] concluído company=${args.company}${range} orders_processed=${processedOrders} items_processed=${processedItems} skipped_existing=${skippedExisting} reconciled_items_only=${reconciledItemsOnly}${onlyInsertLog} elapsed=${elapsed}s`,
     );
 
     try {
