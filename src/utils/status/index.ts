@@ -43,6 +43,7 @@ export function mapPrecodeStatus(raw: string): OrderStatus {
     bloqueado: "bloqueado",
     retornando: "devolvido",
     retornou: "devolvido",
+    devolvendo: "devolvido",
     "solicitado devolução": "devolvido",
     desmembrado: "desmembrado",
   };
